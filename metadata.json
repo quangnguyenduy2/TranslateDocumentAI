@@ -1,0 +1,5 @@
+{
+  "name": "D12 Document Translate AI",
+  "description": "A powerful document translation tool leveraging Google Gemini API. Supports Excel (.xlsx) and Markdown (.md) files while preserving structure and formatting. Features multi-language support and batch processing.",
+  "requestFramePermissions": []
+}
