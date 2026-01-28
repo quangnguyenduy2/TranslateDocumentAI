@@ -19,10 +19,16 @@ import {
   IconSplit,
   IconPlus,
   IconSave,
-  IconImport
+  IconImport,
+  IconSearch,
+  IconEdit
 } from './components/Icons';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem } from './types';
-import { processMarkdown, processExcel, getExcelSheetNames, parseGlossaryFromExcel } from './services/fileProcessing';
+import { processMarkdown, processExcel, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
+import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
+
+const APP_VERSION = "1.1.0";
+const APP_AUTHOR = "NDQuang2";
 
 const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -43,34 +49,64 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load History & Glossary from LocalStorage
+  // Load History & Glossary from Storage (IndexedDB)
   useEffect(() => {
-    const savedGlossary = localStorage.getItem('d12_glossary');
-    if (savedGlossary) {
-      try { setGlossary(JSON.parse(savedGlossary)); } catch(e) {}
-    }
+    const loadData = async () => {
+      // 1. Load Glossary from IDB
+      try {
+        const storedGlossary = await getGlossaryFromDB();
+        setGlossary(storedGlossary);
+      } catch (e) {
+        console.error("Failed to load glossary from DB", e);
+      }
 
-    const savedHistory = localStorage.getItem('d12_history');
-    if (savedHistory) {
-      try { 
-        const parsed = JSON.parse(savedHistory);
-        // Filter out items older than 24h
-        const now = Date.now();
-        const validHistory = parsed.filter((h: HistoryItem) => (now - h.timestamp) < 24 * 60 * 60 * 1000);
-        setHistory(validHistory);
-      } catch(e) {}
-    }
+      // 2. Load History from LocalStorage + IDB
+      const savedHistory = localStorage.getItem('d12_history');
+      if (savedHistory) {
+        try { 
+          const parsed: HistoryItem[] = JSON.parse(savedHistory);
+          const now = Date.now();
+          // Filter out items older than 24h
+          const validHistory = parsed.filter((h) => (now - h.timestamp) < 24 * 60 * 60 * 1000);
+          
+          // Rehydrate blobs from IndexedDB
+          const rehydratedHistory = await Promise.all(validHistory.map(async (item) => {
+            const blob = await getFileFromDB(item.id);
+            if (blob) {
+              return {
+                ...item,
+                blob,
+                downloadUrl: URL.createObjectURL(blob)
+              };
+            }
+            return item;
+          }));
+
+          setHistory(rehydratedHistory);
+        } catch(e) {
+          console.error("Failed to load history", e);
+        }
+      }
+    };
+    loadData();
   }, []);
 
-  const saveGlossary = (newGlossary: GlossaryItem[]) => {
+  const handleSaveGlossary = async (newGlossary: GlossaryItem[]) => {
     setGlossary(newGlossary);
-    localStorage.setItem('d12_glossary', JSON.stringify(newGlossary));
+    await saveGlossaryToDB(newGlossary); // Persist to IDB
   };
 
-  const updateHistory = (newItem: HistoryItem) => {
+  const updateHistory = async (newItem: HistoryItem) => {
+    // 1. Save Blob to IDB
+    if (newItem.blob) {
+      await saveFileToDB(newItem.id, newItem.blob);
+    }
+
     setHistory(prev => {
       const updated = [newItem, ...prev];
-      localStorage.setItem('d12_history', JSON.stringify(updated.map(({ blob, downloadUrl, ...rest }) => rest))); // Don't store blobs in LS
+      // 2. Save Metadata to LocalStorage (exclude blob/url to save space)
+      const metaDataOnly = updated.map(({ blob, downloadUrl, ...rest }) => rest);
+      localStorage.setItem('d12_history', JSON.stringify(metaDataOnly));
       return updated;
     });
   };
@@ -264,8 +300,8 @@ const App: React.FC = () => {
           translatedText: translatedTextStr
         } : q));
 
-        // Add to History
-        updateHistory({
+        // Add to History (Async)
+        await updateHistory({
           id: item.id,
           fileName: item.file.name,
           fileType: item.type,
@@ -290,109 +326,282 @@ const App: React.FC = () => {
     addLog('Batch processing finished.', 'success');
   };
 
-  // --- SUB-COMPONENTS FOR MODALS ---
+  // --- GLOSSARY MODAL (Updated for Import Wizard) ---
 
   const GlossaryModal = () => {
     const [term, setTerm] = useState('');
     const [translation, setTranslation] = useState('');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [editingId, setEditingId] = useState<string | null>(null);
     const glossaryFileRef = useRef<HTMLInputElement>(null);
     const [importLoading, setImportLoading] = useState(false);
+    
+    // Import Wizard State
+    const [importFile, setImportFile] = useState<File | null>(null);
+    const [previewData, setPreviewData] = useState<ExcelPreviewData | null>(null);
+    const [sourceCol, setSourceCol] = useState<number>(-1);
+    const [targetCol, setTargetCol] = useState<number>(-1);
+    const [importStep, setImportStep] = useState<'upload' | 'mapping'>('upload');
 
-    const addTerm = () => {
-      if (term && translation) {
-        saveGlossary([...glossary, { id: Math.random().toString(36), term, translation }]);
-        setTerm('');
-        setTranslation('');
+    const handleSaveTerm = async () => {
+      if (!term || !translation) return;
+
+      let newGlossary = [];
+      if (editingId) {
+        newGlossary = glossary.map(g => g.id === editingId ? { ...g, term, translation } : g);
+        setEditingId(null);
+        addLog('Term updated.', 'success');
+      } else {
+        if (glossary.some(g => g.term.toLowerCase() === term.toLowerCase())) {
+          addLog('Term already exists.', 'error');
+          return;
+        }
+        newGlossary = [...glossary, { id: Math.random().toString(36), term, translation }];
+        addLog('Term added.', 'success');
+      }
+      await handleSaveGlossary(newGlossary);
+      setTerm('');
+      setTranslation('');
+    };
+
+    const startEdit = (item: GlossaryItem) => {
+      setTerm(item.term);
+      setTranslation(item.translation);
+      setEditingId(item.id);
+    };
+
+    const cancelEdit = () => {
+      setTerm('');
+      setTranslation('');
+      setEditingId(null);
+    };
+
+    const removeTerm = async (id: string) => {
+      if (editingId === id) cancelEdit();
+      const newGlossary = glossary.filter(g => g.id !== id);
+      await handleSaveGlossary(newGlossary);
+    };
+
+    const clearGlossary = async () => {
+      if (window.confirm("Are you sure you want to delete ALL glossary terms? This cannot be undone.")) {
+        await clearGlossaryDB();
+        setGlossary([]);
+        addLog('Glossary cleared.', 'info');
       }
     };
 
-    const removeTerm = (id: string) => {
-      saveGlossary(glossary.filter(g => g.id !== id));
-    };
-
-    const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (!e.target.files || e.target.files.length === 0) return;
-      
-      setImportLoading(true);
-      let newItems: GlossaryItem[] = [];
-      let importedCount = 0;
-
-      for (let i = 0; i < e.target.files.length; i++) {
-        const file = e.target.files[i];
+    // Step 1: Select File
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files.length > 0) {
+        const file = e.target.files[0];
+        setImportFile(file);
+        setImportLoading(true);
         try {
-          const items = await parseGlossaryFromExcel(file, targetLang);
-          newItems = [...newItems, ...items];
-          importedCount += items.length;
-          addLog(`Imported ${items.length} terms from ${file.name}`, 'success');
+          const preview = await getExcelPreview(file);
+          setPreviewData(preview);
+          setImportStep('mapping');
+          // Auto-guess columns
+          const headers = preview.headers.map(h => h.toLowerCase());
+          const guessSource = headers.findIndex(h => h.includes('japanese') || h.includes('source') || h.includes('term'));
+          const guessTarget = headers.findIndex(h => h.includes('vietnamese') || h.includes('target') || h.includes('trans'));
+          if (guessSource >= 0) setSourceCol(guessSource);
+          if (guessTarget >= 0) setTargetCol(guessTarget);
         } catch (err) {
           console.error(err);
-          addLog(`Failed to import glossary from ${file.name}`, 'error');
+          addLog('Failed to read Excel file.', 'error');
+        } finally {
+          setImportLoading(false);
         }
       }
-
-      if (newItems.length > 0) {
-        saveGlossary([...glossary, ...newItems]);
-      }
-      
-      setImportLoading(false);
       if (glossaryFileRef.current) glossaryFileRef.current.value = '';
     };
 
+    // Step 2: Confirm Mapping & Save
+    const handleConfirmImport = async () => {
+      if (!importFile || sourceCol === -1 || targetCol === -1) {
+        addLog("Please select both Source and Target columns.", 'error');
+        return;
+      }
+      
+      setImportLoading(true);
+      try {
+        const items = await parseGlossaryByColumns(importFile, sourceCol, targetCol);
+        
+        // Merge Logic: Overwrite duplicates or Append? 
+        // Strategy: Append, but remove old items if term exists to avoid duplicates
+        const newTermsMap = new Map();
+        items.forEach(i => newTermsMap.set(i.term.toLowerCase(), i));
+        
+        const existingGlossary = [...glossary];
+        // Remove existing items that are in the new import (overwrite behavior)
+        const finalGlossary = existingGlossary.filter(g => !newTermsMap.has(g.term.toLowerCase()));
+        
+        const mergedList = [...finalGlossary, ...items];
+        
+        await handleSaveGlossary(mergedList);
+        addLog(`Imported ${items.length} terms successfully.`, 'success');
+        
+        // Reset Import UI
+        setImportStep('upload');
+        setImportFile(null);
+        setPreviewData(null);
+      } catch (err) {
+        console.error(err);
+        addLog('Failed to process import.', 'error');
+      } finally {
+        setImportLoading(false);
+      }
+    };
+
+    const filteredGlossary = glossary.filter(g => 
+      g.term.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      g.translation.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
     if (!showGlossaryModal) return null;
+
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-        <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
+        <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
           <div className="p-4 border-b border-slate-700 flex justify-between items-center">
             <h3 className="font-bold text-lg text-white flex items-center gap-2"><IconBook className="w-5 h-5 text-blue-400"/> Glossary Management</h3>
             <button onClick={() => setShowGlossaryModal(false)}><IconClose className="text-slate-400 hover:text-white" /></button>
           </div>
-          <div className="p-4 space-y-4 overflow-y-auto flex-1 custom-scrollbar">
+          
+          <div className="p-4 flex-1 overflow-hidden flex flex-col md:flex-row gap-6">
             
-            {/* Import Section */}
-            <div className="bg-slate-700/30 p-3 rounded border border-slate-700 border-dashed">
-               <div className="flex justify-between items-center">
-                  <div>
-                    <h4 className="text-sm font-medium text-white flex items-center gap-1.5"><IconExcel className="w-4 h-4 text-green-400" /> Import from Excel</h4>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Auto-detects "{targetLang}" and Source columns.</p>
-                  </div>
-                  <button 
-                    onClick={() => glossaryFileRef.current?.click()}
-                    disabled={importLoading}
-                    className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                  >
-                    {importLoading ? <IconLoading className="w-3 h-3" /> : <IconImport className="w-3 h-3" />}
-                    Import
-                  </button>
-                  <input 
-                    type="file" 
-                    multiple 
-                    accept=".xlsx,.xls" 
-                    ref={glossaryFileRef} 
-                    className="hidden" 
-                    onChange={handleImportExcel} 
-                  />
-               </div>
+            {/* LEFT PANEL: INPUT / SEARCH / LIST */}
+            <div className="flex-1 flex flex-col gap-4 overflow-hidden border-r border-slate-700/50 pr-4">
+               {/* Input Form */}
+              <div className="flex gap-2 items-center bg-slate-700/20 p-2 rounded border border-slate-700/50">
+                <input value={term} onChange={e => setTerm(e.target.value)} placeholder="Term (Source)" className="bg-slate-900 border border-slate-700 rounded p-2 flex-1 text-sm outline-none focus:border-blue-500" />
+                <input value={translation} onChange={e => setTranslation(e.target.value)} placeholder="Translation" className="bg-slate-900 border border-slate-700 rounded p-2 flex-1 text-sm outline-none focus:border-blue-500" />
+                <button onClick={handleSaveTerm} className={`${editingId ? 'bg-orange-600 hover:bg-orange-500' : 'bg-blue-600 hover:bg-blue-500'} p-2 rounded text-white transition-colors`} title={editingId ? "Update" : "Add"}>
+                   {editingId ? <IconSave className="w-5 h-5" /> : <IconPlus className="w-5 h-5" />}
+                </button>
+                {editingId && (
+                  <button onClick={cancelEdit} className="bg-slate-600 hover:bg-slate-500 p-2 rounded text-white" title="Cancel"><IconClose className="w-5 h-5" /></button>
+                )}
+              </div>
+
+              {/* Search */}
+              <div className="relative">
+                 <IconSearch className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+                 <input 
+                   value={searchTerm} 
+                   onChange={e => setSearchTerm(e.target.value)} 
+                   placeholder="Search..." 
+                   className="w-full bg-slate-900 border border-slate-700 rounded pl-9 p-2 text-sm outline-none focus:border-blue-500"
+                 />
+              </div>
+              
+              {/* List */}
+              <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar min-h-[200px] border border-slate-700/50 rounded p-2 bg-slate-900/30">
+                {glossary.length === 0 ? <p className="text-slate-500 text-sm italic text-center mt-8">No terms. Import or add one.</p> : 
+                  filteredGlossary.length === 0 ? <p className="text-slate-500 text-sm italic text-center mt-8">No matches.</p> :
+                  filteredGlossary.map(g => (
+                    <div key={g.id} className={`flex justify-between items-center bg-slate-700/50 p-2 rounded text-sm group ${editingId === g.id ? 'border border-orange-500/50 bg-orange-900/10' : ''}`}>
+                      <div className="flex-1 break-words mr-2"><span className="text-blue-300 font-medium">{g.term}</span> <span className="text-slate-500 mx-2">→</span> <span className="text-green-300">{g.translation}</span></div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <button onClick={() => startEdit(g)} className="text-slate-400 hover:text-orange-400 p-1"><IconEdit className="w-3.5 h-3.5" /></button>
+                         <button onClick={() => removeTerm(g.id)} className="text-slate-400 hover:text-red-400 p-1"><IconTrash className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-500">
+                 <span>Total: {glossary.length} terms</span>
+                 {glossary.length > 0 && <button onClick={clearGlossary} className="text-red-400 hover:underline">Delete All</button>}
+              </div>
             </div>
 
-            <div className="flex gap-2">
-              <input value={term} onChange={e => setTerm(e.target.value)} placeholder="Term (e.g., 'Japanese')" className="bg-slate-900 border border-slate-700 rounded p-2 flex-1 text-sm outline-none focus:border-blue-500" />
-              <input value={translation} onChange={e => setTranslation(e.target.value)} placeholder={`Translation (${targetLang})`} className="bg-slate-900 border border-slate-700 rounded p-2 flex-1 text-sm outline-none focus:border-blue-500" />
-              <button onClick={addTerm} className="bg-blue-600 hover:bg-blue-500 p-2 rounded text-white"><IconPlus className="w-5 h-5" /></button>
+            {/* RIGHT PANEL: IMPORT WIZARD */}
+            <div className="w-full md:w-[450px] flex flex-col gap-4 bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+               <h4 className="font-bold text-white flex items-center gap-2 border-b border-slate-700 pb-2">
+                 <IconExcel className="w-5 h-5 text-green-400" /> 
+                 Bulk Import Wizard
+               </h4>
+
+               {importStep === 'upload' && (
+                 <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-700 rounded-lg hover:bg-slate-800/50 transition-colors p-8 cursor-pointer" onClick={() => glossaryFileRef.current?.click()}>
+                    <input type="file" accept=".xlsx" ref={glossaryFileRef} className="hidden" onChange={handleFileSelect} />
+                    {importLoading ? <IconLoading className="w-8 h-8 text-blue-400 mb-2" /> : <IconImport className="w-8 h-8 text-slate-500 mb-2" />}
+                    <p className="text-sm font-medium text-slate-300">Click to upload Excel</p>
+                    <p className="text-xs text-slate-500 text-center mt-1">Supports large files (10k+ rows)<br/>Row 1 must be headers.</p>
+                 </div>
+               )}
+
+               {importStep === 'mapping' && previewData && (
+                 <div className="flex-1 flex flex-col gap-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex justify-between items-center">
+                       <span className="text-xs text-slate-400 bg-slate-800 px-2 py-1 rounded">File: {importFile?.name}</span>
+                       <button onClick={() => { setImportStep('upload'); setImportFile(null); }} className="text-xs text-blue-400 hover:underline">Change File</button>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-slate-400 block mb-1">Column for <b>Term</b> (Source):</label>
+                        <select value={sourceCol} onChange={e => setSourceCol(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-sm text-white">
+                           <option value={-1}>-- Select Column --</option>
+                           {previewData.headers.map((h, idx) => (
+                             <option key={idx} value={idx}>{h}</option>
+                           ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 block mb-1">Column for <b>Translation</b> (Target):</label>
+                        <select value={targetCol} onChange={e => setTargetCol(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-sm text-white">
+                           <option value={-1}>-- Select Column --</option>
+                           {previewData.headers.map((h, idx) => (
+                             <option key={idx} value={idx}>{h}</option>
+                           ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-auto border border-slate-700 rounded bg-slate-900">
+                       <table className="w-full text-left text-xs text-slate-300">
+                         <thead className="bg-slate-800 text-slate-400 font-medium sticky top-0">
+                           <tr>
+                             {previewData.headers.map((h, i) => (
+                               <th key={i} className={`p-2 border-b border-slate-700 whitespace-nowrap ${i === sourceCol ? 'bg-blue-900/30 text-blue-300' : ''} ${i === targetCol ? 'bg-green-900/30 text-green-300' : ''}`}>
+                                 {h}
+                               </th>
+                             ))}
+                           </tr>
+                         </thead>
+                         <tbody>
+                           {previewData.sampleRows.map((row, rIdx) => (
+                             <tr key={rIdx} className="border-b border-slate-800 last:border-0">
+                               {row.map((cell, cIdx) => (
+                                 <td key={cIdx} className={`p-2 truncate max-w-[100px] ${cIdx === sourceCol ? 'bg-blue-900/10' : ''} ${cIdx === targetCol ? 'bg-green-900/10' : ''}`}>
+                                   {cell}
+                                 </td>
+                               ))}
+                             </tr>
+                           ))}
+                         </tbody>
+                       </table>
+                       {previewData.totalRowsEstimate > 6 && (
+                         <div className="p-2 text-center text-[10px] text-slate-500 italic bg-slate-800/50">
+                           + approx {previewData.totalRowsEstimate - 6} more rows
+                         </div>
+                       )}
+                    </div>
+
+                    <button 
+                      onClick={handleConfirmImport} 
+                      disabled={importLoading || sourceCol === -1 || targetCol === -1}
+                      className="w-full py-2 bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded font-medium text-sm flex items-center justify-center gap-2 transition-all"
+                    >
+                      {importLoading ? <IconLoading className="w-4 h-4" /> : <IconImport className="w-4 h-4" />}
+                      Process Import
+                    </button>
+                 </div>
+               )}
             </div>
-            
-            <div className="space-y-2">
-              {glossary.length === 0 ? <p className="text-slate-500 text-sm italic">No terms added yet.</p> : 
-                glossary.map(g => (
-                  <div key={g.id} className="flex justify-between items-center bg-slate-700/50 p-2 rounded text-sm group">
-                    <div className="flex-1 break-words mr-2"><span className="text-blue-300 font-medium">{g.term}</span> <span className="text-slate-500">→</span> <span className="text-green-300">{g.translation}</span></div>
-                    <button onClick={() => removeTerm(g.id)} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><IconTrash className="w-4 h-4" /></button>
-                  </div>
-                ))
-              }
-            </div>
-          </div>
-          <div className="p-4 border-t border-slate-700 text-right">
-             <button onClick={() => setShowGlossaryModal(false)} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm">Close</button>
+
           </div>
         </div>
       </div>
@@ -538,14 +747,14 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col">
       {/* Modals */}
       <GlossaryModal />
       <ContextModal />
       <HistoryModal />
       <PreviewModal />
 
-      <div className="max-w-4xl mx-auto space-y-8">
+      <div className="max-w-4xl mx-auto space-y-8 flex-1 w-full">
         
         {/* Header with Tools */}
         <header className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -728,6 +937,15 @@ const App: React.FC = () => {
           </div>
         </div>
       </div>
+      
+      {/* Footer */}
+      <footer className="w-full max-w-4xl mx-auto mt-8 py-4 border-t border-slate-800 text-center text-slate-600 text-xs">
+         <div className="flex justify-center items-center gap-4">
+            <span>DocuTranslate AI v{APP_VERSION}</span>
+            <span>•</span>
+            <span>Created by {APP_AUTHOR}</span>
+         </div>
+      </footer>
     </div>
   );
 };

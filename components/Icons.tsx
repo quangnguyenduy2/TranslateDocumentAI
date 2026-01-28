@@ -20,7 +20,9 @@ import {
   Split,
   Plus,
   Save,
-  Import
+  Import,
+  Search,
+  Edit2
 } from 'lucide-react';
 
 export const IconUpload = ({ className }: { className?: string }) => <Upload className={className} />;
@@ -44,3 +46,5 @@ export const IconSplit = ({ className }: { className?: string }) => <Split class
 export const IconPlus = ({ className }: { className?: string }) => <Plus className={className} />;
 export const IconSave = ({ className }: { className?: string }) => <Save className={className} />;
 export const IconImport = ({ className }: { className?: string }) => <Import className={className} />;
+export const IconSearch = ({ className }: { className?: string }) => <Search className={className} />;
+export const IconEdit = ({ className }: { className?: string }) => <Edit2 className={className} />;

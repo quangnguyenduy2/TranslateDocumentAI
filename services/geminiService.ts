@@ -6,16 +6,37 @@ const ai = new GoogleGenAI({ apiKey });
 
 const MODEL_FAST = 'gemini-3-flash-preview';
 
-const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, glossary: GlossaryItem[]) => {
+/**
+ * Filters the master glossary to only include terms that appear in the source text.
+ * This effectively creates a subset glossary for the specific translation task.
+ * Case-insensitive matching.
+ */
+const filterRelevantGlossary = (text: string, fullGlossary: GlossaryItem[]): GlossaryItem[] => {
+  if (!fullGlossary || fullGlossary.length === 0) return [];
+  
+  const textLower = text.toLowerCase();
+  const relevantItems: GlossaryItem[] = [];
+  
+  // Optimization: If glossary is massive (e.g. 10k), looping every time might be slightly costly 
+  // but still faster than network. For < 10k items, simple iteration is sub-10ms.
+  for (const item of fullGlossary) {
+    if (textLower.includes(item.term.toLowerCase())) {
+      relevantItems.push(item);
+    }
+  }
+  return relevantItems;
+};
+
+const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, relevantGlossary: GlossaryItem[]) => {
   let instruction = `You are a professional technical translator. Translate the content to ${targetLang}.`;
 
   if (context && context.trim()) {
     instruction += `\n\nCONTEXT:\n${context}`;
   }
 
-  if (glossary && glossary.length > 0) {
+  if (relevantGlossary && relevantGlossary.length > 0) {
     instruction += `\n\nGLOSSARY (Strictly enforce these translations):\n`;
-    glossary.forEach(item => {
+    relevantGlossary.forEach(item => {
       instruction += `- ${item.term} -> ${item.translation}\n`;
     });
   }
@@ -34,7 +55,9 @@ export const translateText = async (
 ): Promise<string> => {
   if (!text.trim()) return '';
 
-  const systemInstruction = buildSystemInstruction(targetLang, context, glossary);
+  // Filter glossary to only what's needed for THIS text block
+  const relevantGlossary = filterRelevantGlossary(text, glossary);
+  const systemInstruction = buildSystemInstruction(targetLang, context, relevantGlossary);
 
   const prompt = `
     ${systemInstruction}
@@ -83,7 +106,11 @@ export const translateBatchStrings = async (
 ): Promise<string[]> => {
   if (texts.length === 0) return [];
 
-  const systemInstruction = buildSystemInstruction(targetLang, context, glossary);
+  // For batches, we join all texts to find relevant glossary terms for the whole batch
+  const combinedText = texts.join(' ');
+  const relevantGlossary = filterRelevantGlossary(combinedText, glossary);
+  
+  const systemInstruction = buildSystemInstruction(targetLang, context, relevantGlossary);
 
   const prompt = `
     ${systemInstruction}

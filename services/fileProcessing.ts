@@ -60,74 +60,89 @@ const taggedStringToRichText = (text: string): ExcelJS.CellRichTextValue => {
 
 const hasFormattingTags = (text: string) => /<\/?(?:b|i|u|s)>/.test(text);
 
-// --- GLOSSARY PARSING ---
+const getGlossaryCellString = (cell: ExcelJS.Cell): string => {
+  if (!cell) return '';
+  if (cell.value && typeof cell.value === 'object' && 'richText' in cell.value) {
+    return (cell.value as ExcelJS.CellRichTextValue).richText.map(r => r.text).join('');
+  }
+  if (cell.formula) {
+    if (cell.result !== undefined && cell.result !== null && typeof cell.result !== 'object') {
+        return String(cell.result);
+    }
+  }
+  return cell.text || (cell.value !== null && cell.value !== undefined ? String(cell.value) : '');
+};
 
-export const parseGlossaryFromExcel = async (
-  file: File, 
-  targetLang: SupportedLanguage
-): Promise<GlossaryItem[]> => {
+// --- GLOSSARY IMPORT UTILS ---
+
+export interface ExcelPreviewData {
+  headers: string[];
+  sampleRows: string[][]; // First 5 rows of data
+  totalRowsEstimate: number;
+}
+
+/**
+ * Reads the first sheet of an Excel file to get headers and sample data.
+ * Used for the Column Mapping UI.
+ */
+export const getExcelPreview = async (file: File): Promise<ExcelPreviewData> => {
   const arrayBuffer = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(arrayBuffer);
   
-  const worksheet = workbook.worksheets[0]; // Assume first sheet
-  if (!worksheet) return [];
+  const worksheet = workbook.worksheets[0]; // Assume glossary is on first sheet
+  if (!worksheet) throw new Error("File contains no sheets");
 
-  const items: GlossaryItem[] = [];
+  const headers: string[] = [];
+  const sampleRows: string[][] = [];
   
-  // 1. Identify Headers in Row 1
+  // Assume Row 1 is header
   const headerRow = worksheet.getRow(1);
-  let termColIndex = -1;
-  let transColIndex = -1;
-
-  // Normalize target lang for comparison (e.g., "Vietnamese" -> "vietnamese")
-  const targetLangKey = targetLang.toLowerCase();
-
-  headerRow.eachCell((cell, colNumber) => {
-    const val = cell.value?.toString().toLowerCase().trim() || '';
-    
-    // Find Translation Column (Matches target language)
-    if (val.includes(targetLangKey)) {
-      transColIndex = colNumber;
-    }
-
-    // Find Term Column (Priority: Japanese -> English -> Source -> Term)
-    // We prioritize Japanese as per the specific user requirement example
-    if (termColIndex === -1) {
-       if (val === 'japanese' || val.includes('japanese')) termColIndex = colNumber;
-       else if (val === 'english' || val.includes('english')) termColIndex = colNumber;
-       else if (val === 'term' || val === 'source') termColIndex = colNumber;
-    } else {
-       // Upgrade priority if we found "Japanese" specifically
-       if ((val === 'japanese' || val.includes('japanese')) && !headerRow.getCell(termColIndex).value?.toString().toLowerCase().includes('japanese')) {
-         termColIndex = colNumber;
-       }
-    }
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+     headers[colNumber - 1] = getGlossaryCellString(cell).trim() || `Column ${colNumber}`;
   });
 
-  // Fallback if headers not found or vague: 
-  // If we found a target col, assume the first text column that isn't ID/Target is the term.
-  if (transColIndex !== -1 && termColIndex === -1) {
-    headerRow.eachCell((cell, colNumber) => {
-       const val = cell.value?.toString().toLowerCase() || '';
-       if (colNumber !== transColIndex && !val.includes('id') && termColIndex === -1) {
-         termColIndex = colNumber;
-       }
-    });
-  }
-
-  // If we still don't have columns, we can't parse safely
-  if (termColIndex === -1 || transColIndex === -1) {
-    console.warn(`Could not identify 'Japanese/Term' or '${targetLang}' columns in ${file.name}`);
-    return [];
-  }
-
-  // 2. Extract Data
+  // Get next 5 rows
   worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return; // Skip header
+    if (rowNumber === 1) return;
+    if (sampleRows.length >= 5) return;
 
-    const term = row.getCell(termColIndex).text?.trim();
-    const translation = row.getCell(transColIndex).text?.trim();
+    const rowData: string[] = [];
+    // Ensure we map based on header length to align columns
+    for(let i = 0; i < headers.length; i++) {
+       const cell = row.getCell(i + 1);
+       rowData.push(getGlossaryCellString(cell));
+    }
+    sampleRows.push(rowData);
+  });
+
+  return {
+    headers,
+    sampleRows,
+    totalRowsEstimate: worksheet.rowCount
+  };
+};
+
+/**
+ * Extracts glossary items based on specific user-mapped columns.
+ */
+export const parseGlossaryByColumns = async (
+  file: File, 
+  termColIndex: number, // 0-based index
+  transColIndex: number // 0-based index
+): Promise<GlossaryItem[]> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
+  const worksheet = workbook.worksheets[0];
+
+  const items: GlossaryItem[] = [];
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // Skip Header
+
+    const term = getGlossaryCellString(row.getCell(termColIndex + 1)).trim();
+    const translation = getGlossaryCellString(row.getCell(transColIndex + 1)).trim();
 
     if (term && translation) {
       items.push({
@@ -139,6 +154,16 @@ export const parseGlossaryFromExcel = async (
   });
 
   return items;
+};
+
+// Deprecated in favor of UI mapping, but kept for fallback legacy calls if needed
+export const parseGlossaryFromExcel = async (
+  file: File, 
+  targetLang: SupportedLanguage
+): Promise<GlossaryItem[]> => {
+  const preview = await getExcelPreview(file);
+  // Simple fallback: If headers exist, try to guess, otherwise use Col 0 and 1
+  return parseGlossaryByColumns(file, 0, 1); 
 };
 
 // --- MAIN PROCESSING ---
