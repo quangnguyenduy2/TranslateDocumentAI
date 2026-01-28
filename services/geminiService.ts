@@ -44,6 +44,65 @@ const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, 
   return instruction;
 };
 
+// Helper to read file as Base64 (stripping the data URL prefix)
+const fileToBase64 = async (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Remove "data:image/png;base64," prefix
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = error => reject(error);
+  });
+};
+
+/**
+ * Extracts text from an image using multimodal capabilities (OCR).
+ * It preserves layout as Markdown.
+ */
+export const extractTextFromImage = async (file: File): Promise<string> => {
+  const base64Data = await fileToBase64(file);
+  const mimeType = file.type;
+
+  const prompt = `
+    Analyze this image and extract all visible text.
+    
+    RULES:
+    1. Output ONLY the extracted text formatted as Markdown.
+    2. Preserve the structural layout (e.g., use Markdown tables for grids, lists for bullet points, headers for large text).
+    3. Do NOT translate yet. Just transcribe.
+    4. If the image contains no text, return "NO_TEXT_FOUND".
+    5. Do not describe visual elements (like "a photo of a cat") unless they contain text captions.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_FAST,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType, data: base64Data } },
+            { text: prompt }
+          ]
+        }
+      ]
+    });
+    
+    let text = response.text || '';
+    if (text.startsWith('```markdown')) {
+      text = text.replace(/^```markdown\s*/, '').replace(/\s*```$/, '');
+    }
+    return text;
+  } catch (error) {
+    console.error("Image OCR error:", error);
+    throw error;
+  }
+};
+
 /**
  * Translates a plain text block (used for Markdown/Text).
  */

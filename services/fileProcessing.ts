@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { translateText, translateBatchStrings } from './geminiService';
+import { translateText, translateBatchStrings, extractTextFromImage } from './geminiService';
 import { SupportedLanguage, GlossaryItem } from '../types';
 
 // --- RICH TEXT HELPERS ---
@@ -192,6 +192,32 @@ export const processMarkdown = async (
   await new Promise(r => setTimeout(r, 100));
 
   onProgress('Done', 100);
+  const blob = new Blob([translatedText], { type: 'text/markdown' });
+  return { blob, translatedText };
+};
+
+export const processImage = async (
+  file: File,
+  targetLang: SupportedLanguage,
+  context: string,
+  glossary: GlossaryItem[],
+  onProgress: (msg: string, percent: number) => void
+): Promise<{ blob: Blob, translatedText: string }> => {
+  onProgress('Uploading and analyzing image (OCR)...', 15);
+  // Step 1: Extract Text using Multimodal Vision
+  const extractedText = await extractTextFromImage(file);
+  
+  if (extractedText.includes("NO_TEXT_FOUND")) {
+    onProgress('No text found in image.', 100);
+    const blob = new Blob(["# No text detected in image"], { type: 'text/markdown' });
+    return { blob, translatedText: "# No text detected in image" };
+  }
+
+  onProgress('Translating extracted text...', 50);
+  // Step 2: Translate the extracted text using standard pipeline (applies glossary)
+  const translatedText = await translateText(extractedText, targetLang, context, glossary);
+  
+  onProgress('Formatting output...', 90);
   const blob = new Blob([translatedText], { type: 'text/markdown' });
   return { blob, translatedText };
 };

@@ -21,13 +21,14 @@ import {
   IconSave,
   IconImport,
   IconSearch,
-  IconEdit
+  IconEdit,
+  IconImage
 } from './components/Icons';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem } from './types';
-import { processMarkdown, processExcel, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
+import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const APP_AUTHOR = "NDQuang2";
 
 const App: React.FC = () => {
@@ -116,8 +117,10 @@ const App: React.FC = () => {
   };
 
   const getFileType = (fileName: string): FileType => {
-    if (fileName.endsWith('.md') || fileName.endsWith('.txt')) return FileType.MARKDOWN;
-    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) return FileType.EXCEL;
+    const lower = fileName.toLowerCase();
+    if (lower.endsWith('.md') || lower.endsWith('.txt')) return FileType.MARKDOWN;
+    if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) return FileType.EXCEL;
+    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) return FileType.IMAGE;
     return FileType.UNKNOWN;
   };
 
@@ -281,6 +284,10 @@ const App: React.FC = () => {
 
         if (item.type === FileType.MARKDOWN) {
           const res = await processMarkdown(item.originalText || '', targetLang, context, glossary, updateProgress);
+          resultBlob = res.blob;
+          translatedTextStr = res.translatedText;
+        } else if (item.type === FileType.IMAGE) {
+          const res = await processImage(item.file, targetLang, context, glossary, updateProgress);
           resultBlob = res.blob;
           translatedTextStr = res.translatedText;
         } else {
@@ -649,7 +656,9 @@ const App: React.FC = () => {
                  <div key={h.id} className="flex items-center justify-between bg-slate-700/30 p-3 rounded border border-slate-700/50">
                     <div className="flex items-center gap-3">
                        <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center">
-                          {h.fileType === FileType.EXCEL ? <IconExcel className="w-4 h-4 text-green-400" /> : <IconMarkdown className="w-4 h-4 text-blue-400" />}
+                          {h.fileType === FileType.EXCEL ? <IconExcel className="w-4 h-4 text-green-400" /> : 
+                           h.fileType === FileType.IMAGE ? <IconImage className="w-4 h-4 text-orange-400" /> :
+                           <IconMarkdown className="w-4 h-4 text-blue-400" />}
                        </div>
                        <div>
                           <div className="text-sm font-medium text-white">{h.fileName}</div>
@@ -659,7 +668,7 @@ const App: React.FC = () => {
                        </div>
                     </div>
                     {h.downloadUrl ? (
-                      <a href={h.downloadUrl} download={`translated_${h.targetLang}_${h.fileName}`} className="p-2 hover:bg-slate-600 rounded text-green-400"><IconDownload className="w-4 h-4" /></a>
+                      <a href={h.downloadUrl} download={`translated_${h.targetLang}_${h.fileName}${h.fileType === FileType.IMAGE ? '.md' : ''}`} className="p-2 hover:bg-slate-600 rounded text-green-400"><IconDownload className="w-4 h-4" /></a>
                     ) : (
                       <span className="text-xs text-red-400 italic px-2">Expired</span>
                     )}
@@ -709,9 +718,13 @@ const App: React.FC = () => {
              {/* Original */}
              <div className="flex-1 border-r border-slate-700 flex flex-col min-w-0">
                 <div className="p-2 bg-slate-800/50 text-xs font-semibold text-slate-400 text-center uppercase tracking-wide sticky top-0">Original</div>
-                <div className="flex-1 overflow-auto p-4 custom-scrollbar">
+                <div className="flex-1 overflow-auto p-4 custom-scrollbar bg-slate-900/30">
                    {previewItem.type === FileType.MARKDOWN ? (
                      <pre className="whitespace-pre-wrap font-mono text-sm text-slate-300 leading-relaxed">{previewItem.originalText}</pre>
+                   ) : previewItem.type === FileType.IMAGE ? (
+                     <div className="flex items-center justify-center h-full p-4">
+                       <img src={URL.createObjectURL(previewItem.file)} alt="Original" className="max-w-full max-h-full object-contain rounded shadow-lg border border-slate-700" />
+                     </div>
                    ) : (
                      <div className="flex items-center justify-center h-full text-slate-500 italic">Preview not available for Excel source.</div>
                    )}
@@ -736,8 +749,8 @@ const App: React.FC = () => {
           <div className="p-3 bg-slate-800 border-t border-slate-700 text-xs text-slate-400 flex justify-between items-center rounded-b-xl">
             <span><span className="bg-yellow-500/20 text-yellow-200 px-1 rounded">Highlight</span> indicates glossary terms applied.</span>
             {previewItem.downloadUrl && (
-              <a href={previewItem.downloadUrl} download={`translated_${targetLang}_${previewItem.file.name}`} className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded font-medium transition-colors">
-                <IconDownload className="w-3 h-3" /> Download
+              <a href={previewItem.downloadUrl} download={`translated_${targetLang}_${previewItem.file.name}${previewItem.type === FileType.IMAGE ? '.md' : ''}`} className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded font-medium transition-colors">
+                <IconDownload className="w-3 h-3" /> Download Result
               </a>
             )}
           </div>
@@ -818,12 +831,12 @@ const App: React.FC = () => {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv" />
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp" />
                 <div className="w-16 h-16 bg-slate-700 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform group-hover:bg-blue-500/20">
                   <IconUpload className="w-8 h-8 text-blue-400 group-hover:text-blue-300" />
                 </div>
                 <h3 className="text-xl font-semibold text-white mb-2">Click or Drag & Drop Files</h3>
-                <p className="text-slate-400 text-sm">Supported: Markdown (.md), Text (.txt), Excel (.xlsx)</p>
+                <p className="text-slate-400 text-sm">Supported: Markdown, Text, Excel, Images (PNG/JPG)</p>
               </div>
             )}
 
@@ -833,7 +846,7 @@ const App: React.FC = () => {
                 {/* Add More */}
                 {globalStatus !== AppStatus.TRANSLATING && (
                   <div className="border border-dashed border-slate-600 rounded-lg p-3 flex items-center justify-center gap-2 text-slate-400 hover:text-blue-300 hover:border-blue-400 hover:bg-slate-800/50 cursor-pointer transition-all" onClick={() => fileInputRef.current?.click()}>
-                     <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv" />
+                     <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp" />
                      <IconUpload className="w-4 h-4" /> <span className="text-sm">Add more files</span>
                   </div>
                 )}
@@ -843,7 +856,9 @@ const App: React.FC = () => {
                     <div key={item.id} className="bg-slate-700/30 rounded-lg border border-slate-700 overflow-hidden">
                       <div className="p-3 flex items-center gap-3">
                         <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center shrink-0">
-                          {item.type === FileType.EXCEL ? <IconExcel className="w-5 h-5 text-green-400" /> : <IconMarkdown className="w-5 h-5 text-blue-400" />}
+                          {item.type === FileType.EXCEL ? <IconExcel className="w-5 h-5 text-green-400" /> : 
+                           item.type === FileType.IMAGE ? <IconImage className="w-5 h-5 text-orange-400" /> :
+                           <IconMarkdown className="w-5 h-5 text-blue-400" />}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex justify-between items-start">
@@ -874,13 +889,13 @@ const App: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
-                           {item.status === AppStatus.COMPLETED && item.type === FileType.MARKDOWN && (
+                           {item.status === AppStatus.COMPLETED && (item.type === FileType.MARKDOWN || item.type === FileType.IMAGE) && (
                              <button onClick={() => setPreviewItem(item)} className="p-1.5 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 rounded-md transition-colors" title="Preview / Compare">
                                <IconEye className="w-4 h-4" />
                              </button>
                            )}
                            {item.downloadUrl && (
-                             <a href={item.downloadUrl} download={`translated_${targetLang}_${item.file.name}`} className="p-1.5 bg-green-500/10 text-green-400 hover:bg-green-500/20 rounded-md transition-colors" title="Download file"><IconDownload className="w-4 h-4" /></a>
+                             <a href={item.downloadUrl} download={`translated_${targetLang}_${item.file.name}${item.type === FileType.IMAGE ? '.md' : ''}`} className="p-1.5 bg-green-500/10 text-green-400 hover:bg-green-500/20 rounded-md transition-colors" title="Download file"><IconDownload className="w-4 h-4" /></a>
                            )}
                            {item.type === FileType.EXCEL && item.availableSheets.length > 0 && (
                              <button onClick={() => toggleExpand(item.id)} className={`p-1.5 rounded-md transition-colors ${item.isExpanded ? 'bg-slate-600 text-white' : 'hover:bg-slate-700 text-slate-400'}`} title="Configure Sheets">

@@ -22,12 +22,14 @@ import {
   Save,
   Import,
   Search,
-  Edit2
+  Edit2,
+  Image as ImageIcon
 } from 'lucide-react';
 
 export const IconUpload = ({ className }: { className?: string }) => <Upload className={className} />;
 export const IconMarkdown = ({ className }: { className?: string }) => <FileText className={className} />;
 export const IconExcel = ({ className }: { className?: string }) => <FileSpreadsheet className={className} />;
+export const IconImage = ({ className }: { className?: string }) => <ImageIcon className={className} />;
 export const IconSuccess = ({ className }: { className?: string }) => <CheckCircle className={className} />;
 export const IconError = ({ className }: { className?: string }) => <AlertCircle className={className} />;
 export const IconLoading = ({ className }: { className?: string }) => <Loader2 className={`animate-spin ${className}`} />;
