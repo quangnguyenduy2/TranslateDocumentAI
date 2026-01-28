@@ -1,8 +1,19 @@
 import ExcelJS from 'exceljs';
-import { translateText, translateBatchStrings, extractTextFromImage } from './geminiService';
+import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64 } from './geminiService';
 import { SupportedLanguage, GlossaryItem } from '../types';
 
-// --- RICH TEXT HELPERS ---
+// --- HELPERS ---
+
+// Helper to convert ArrayBuffer to Base64 string
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+};
 
 const richTextToTaggedString = (value: ExcelJS.CellValue): string => {
   if (value && typeof value === 'object' && 'richText' in value && Array.isArray(value.richText)) {
@@ -234,7 +245,7 @@ export const processExcel = async (
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(arrayBuffer);
 
-  // 1. Collect all translatable content
+  // 1. Collect all translatable content (Text)
   onProgress('Analyzing cells...', 10);
   
   interface TranslatableItem {
@@ -267,12 +278,10 @@ export const processExcel = async (
 
   const totalItems = allItems.length;
   
-  if (totalItems === 0) {
-    onProgress('No text found to translate.', 100);
-  } else {
-    // 2. Translate in batches
+  // 2. Translate Text in batches
+  if (totalItems > 0) {
     const startPercent = 10;
-    const endPercent = 90;
+    const endPercent = 80; // Reserve some progress for images
     const progressRange = endPercent - startPercent;
 
     const BATCH_SIZE = 40;
@@ -288,7 +297,7 @@ export const processExcel = async (
       const progressFraction = itemsProcessedSoFar / totalItems;
       const currentPercent = Math.round(startPercent + (progressFraction * progressRange));
       
-      onProgress(`Translating batch ${currentBatchNumber}/${totalBatches}...`, currentPercent);
+      onProgress(`Translating cell batch ${currentBatchNumber}/${totalBatches}...`, currentPercent);
 
       try {
         const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary);
@@ -304,13 +313,9 @@ export const processExcel = async (
                 } else {
                     cell.value = translatedText;
                 }
+                // Visual cue for translated cells
                 if (!cell.border) {
-                    cell.border = {
-                        top: { style: 'thin' },
-                        left: { style: 'thin' },
-                        bottom: { style: 'thin' },
-                        right: { style: 'thin' }
-                    };
+                    cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
                 }
              }
           }
@@ -322,9 +327,98 @@ export const processExcel = async (
     }
   }
 
-  // 3. Translate Sheet Names
+  // 3. Handle Images inside Excel (Improved Robustness)
+  onProgress('Scanning for images in worksheets...', 80);
+  
+  for (const sheetName of selectedSheets) {
+    const worksheet = workbook.getWorksheet(sheetName);
+    if (!worksheet) continue;
+
+    // ExcelJS exposes images via getImages()
+    const images = worksheet.getImages();
+    
+    if (!images || images.length === 0) {
+        console.log(`No images found in sheet: ${sheetName}`);
+        continue;
+    }
+
+    const totalImages = images.length;
+    let imgCount = 0;
+    
+    // Access internal media model safely
+    // ExcelJS structures internal media differently across versions or build types.
+    // Try to find the master media array.
+    const wbAny = workbook as any;
+    const masterMedia = wbAny.media || wbAny.model?.media || [];
+
+    console.log(`Found ${totalImages} image references in sheet '${sheetName}'. Master media count: ${masterMedia.length}`);
+
+    for (const img of images) {
+        imgCount++;
+        onProgress(`Processing image ${imgCount}/${totalImages} in sheet '${sheetName}'...`, 80 + Math.floor((imgCount/totalImages) * 10));
+
+        try {
+            const mediaId = img.imageId;
+            
+            // Find the actual media data.
+            // Critical Fix: Compare as strings to avoid "1" vs 1 mismatch.
+            const media = masterMedia.find((m: any) => String(m.index) === String(mediaId));
+
+            if (media && media.buffer) {
+                const base64Data = arrayBufferToBase64(media.buffer);
+                const extension = media.extension || 'png';
+                const mimeType = extension === 'png' ? 'image/png' : (extension === 'jpeg' || extension === 'jpg') ? 'image/jpeg' : 'image/png';
+
+                // OCR Extraction
+                const extractedText = await extractTextFromBase64(base64Data, mimeType);
+                
+                if (extractedText && !extractedText.includes("NO_TEXT_FOUND")) {
+                    // Translation
+                    const translatedImgText = await translateText(extractedText, targetLang, context, glossary);
+                    
+                    // Determine where to put the text
+                    // Fix: Check for nativeRow/nativeCol OR row/col. ExcelJS is inconsistent here.
+                    let row = 0;
+                    let col = 0;
+                    
+                    if (img.range && img.range.tl) {
+                         // @ts-ignore
+                         row = Math.floor(img.range.tl.nativeRow ?? img.range.tl.row ?? 0) + 1;
+                         // @ts-ignore
+                         col = Math.floor(img.range.tl.nativeCol ?? img.range.tl.col ?? 0) + 1;
+                    }
+                    
+                    if (row > 0 && col > 0) {
+                        const cell = worksheet.getCell(row, col);
+                        
+                        // Append text to cell
+                        const existingText = cell.text || '';
+                        // Format specifically so it stands out
+                        const newContent = `${existingText ? existingText + '\n\n' : ''}======= IMAGE TRANSLATION =======\n${translatedImgText}\n=================================`;
+                        
+                        cell.value = newContent;
+                        cell.alignment = { wrapText: true, vertical: 'top', horizontal: 'left' };
+                        
+                        // Add a comment to indicate image translation
+                        if (!cell.note) {
+                            cell.note = "Contains translated text extracted from the image at this location.";
+                        }
+                    } else {
+                         console.warn("Could not determine cell coordinates for image", img);
+                    }
+                }
+            } else {
+                console.warn(`Could not find media data for ImageID: ${mediaId}`);
+            }
+        } catch (err) {
+            console.error("Failed to process Excel image", err);
+        }
+    }
+  }
+
+  // 4. Translate Sheet Names
   if (selectedSheets.length > 0) {
-      onProgress('Translating sheet names...', 92);
+      onProgress('Translating sheet names...', 95);
       try {
           const translatedNames = await translateBatchStrings(selectedSheets, targetLang, context, glossary);
           selectedSheets.forEach((oldName, idx) => {

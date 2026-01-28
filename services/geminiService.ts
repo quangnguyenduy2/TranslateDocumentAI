@@ -28,10 +28,17 @@ const filterRelevantGlossary = (text: string, fullGlossary: GlossaryItem[]): Glo
 };
 
 const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, relevantGlossary: GlossaryItem[]) => {
-  let instruction = `You are a professional technical translator. Translate the content to ${targetLang}.`;
+  let instruction = `You are a Multimodal Translator Expert, capable of processing and translating complex documents and text extracted from images with high precision.
+
+YOUR MISSION:
+1. Translate the input content to ${targetLang}.
+2. Auto-detect the source language.
+3. If the input is structured text (Markdown from OCR), PRESERVE the layout, tables, code blocks, and special formatting strictly.
+4. Do not simplify technical terms unless instructed. Maintain a professional tone.
+`;
 
   if (context && context.trim()) {
-    instruction += `\n\nCONTEXT:\n${context}`;
+    instruction += `\nCONTEXT INFO:\n${context}`;
   }
 
   if (relevantGlossary && relevantGlossary.length > 0) {
@@ -60,22 +67,20 @@ const fileToBase64 = async (file: File): Promise<string> => {
 };
 
 /**
- * Extracts text from an image using multimodal capabilities (OCR).
- * It preserves layout as Markdown.
+ * Core function to extract text from Base64 image data
  */
-export const extractTextFromImage = async (file: File): Promise<string> => {
-  const base64Data = await fileToBase64(file);
-  const mimeType = file.type;
-
+export const extractTextFromBase64 = async (base64Data: string, mimeType: string = 'image/png'): Promise<string> => {
   const prompt = `
-    Analyze this image and extract all visible text.
-    
-    RULES:
+    You are an advanced OCR expert. Analyze this image and extract ALL visible text.
+
+    CRITICAL RULES:
     1. Output ONLY the extracted text formatted as Markdown.
-    2. Preserve the structural layout (e.g., use Markdown tables for grids, lists for bullet points, headers for large text).
-    3. Do NOT translate yet. Just transcribe.
-    4. If the image contains no text, return "NO_TEXT_FOUND".
-    5. Do not describe visual elements (like "a photo of a cat") unless they contain text captions.
+    2. PRESERVE the visual layout structure (headers, tables, lists, grids) as closely as possible.
+    3. DO NOT IGNORE small, blurry, rotated, or low-contrast text. Transcribe everything readable.
+    4. If there are charts, graphs, or diagrams, transcribe the visible text labels, legends, and data points into a structured Markdown representation (e.g., a table or a list).
+    5. Do NOT translate yet. Just transcribe in the original language.
+    6. If the image contains absolutely no text, return "NO_TEXT_FOUND".
+    7. Do not describe visual elements (like "a photo of a sunset") unless they act as a caption for text.
   `;
 
   try {
@@ -99,8 +104,17 @@ export const extractTextFromImage = async (file: File): Promise<string> => {
     return text;
   } catch (error) {
     console.error("Image OCR error:", error);
-    throw error;
+    // Return empty string on error so flow doesn't break, but log it
+    return ""; 
   }
+};
+
+/**
+ * Extracts text from an image file using multimodal capabilities (OCR).
+ */
+export const extractTextFromImage = async (file: File): Promise<string> => {
+  const base64Data = await fileToBase64(file);
+  return extractTextFromBase64(base64Data, file.type);
 };
 
 /**
