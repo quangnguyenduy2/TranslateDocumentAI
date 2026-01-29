@@ -327,7 +327,7 @@ export const processExcel = async (
     }
   }
 
-  // 3. Handle Images inside Excel (Improved Robustness)
+  // 3. Handle Images inside Excel
   onProgress('Scanning for images in worksheets...', 80);
   
   for (const sheetName of selectedSheets) {
@@ -336,38 +336,25 @@ export const processExcel = async (
 
     // ExcelJS exposes images via getImages()
     const images = worksheet.getImages();
-    
-    if (!images || images.length === 0) {
-        console.log(`No images found in sheet: ${sheetName}`);
-        continue;
-    }
+    if (!images || images.length === 0) continue;
 
     const totalImages = images.length;
     let imgCount = 0;
-    
-    // Access internal media model safely
-    // ExcelJS structures internal media differently across versions or build types.
-    // Try to find the master media array.
-    const wbAny = workbook as any;
-    const masterMedia = wbAny.media || wbAny.model?.media || [];
-
-    console.log(`Found ${totalImages} image references in sheet '${sheetName}'. Master media count: ${masterMedia.length}`);
 
     for (const img of images) {
         imgCount++;
         onProgress(`Processing image ${imgCount}/${totalImages} in sheet '${sheetName}'...`, 80 + Math.floor((imgCount/totalImages) * 10));
 
         try {
+            // Find media data from workbook model
+            // @ts-ignore - model and media are accessible but types might be loose in ExcelJS
             const mediaId = img.imageId;
-            
-            // Find the actual media data.
-            // Critical Fix: Compare as strings to avoid "1" vs 1 mismatch.
-            const media = masterMedia.find((m: any) => String(m.index) === String(mediaId));
+            // @ts-ignore
+            const media = workbook.model.media.find(m => m.index === mediaId);
 
             if (media && media.buffer) {
                 const base64Data = arrayBufferToBase64(media.buffer);
-                const extension = media.extension || 'png';
-                const mimeType = extension === 'png' ? 'image/png' : (extension === 'jpeg' || extension === 'jpg') ? 'image/jpeg' : 'image/png';
+                const mimeType = media.extension === 'png' ? 'image/png' : media.extension === 'jpeg' || media.extension === 'jpg' ? 'image/jpeg' : 'image/png';
 
                 // OCR Extraction
                 const extractedText = await extractTextFromBase64(base64Data, mimeType);
@@ -377,38 +364,26 @@ export const processExcel = async (
                     const translatedImgText = await translateText(extractedText, targetLang, context, glossary);
                     
                     // Determine where to put the text
-                    // Fix: Check for nativeRow/nativeCol OR row/col. ExcelJS is inconsistent here.
-                    let row = 0;
-                    let col = 0;
+                    // img.range.tl gives { nativeRow, nativeCol } (0-indexed usually)
+                    // We must be careful with indexing. ExcelJS cell access is 1-based.
+                    // @ts-ignore
+                    const row = Math.floor(img.range.tl.nativeRow) + 1;
+                    // @ts-ignore
+                    const col = Math.floor(img.range.tl.nativeCol) + 1;
                     
-                    if (img.range && img.range.tl) {
-                         // @ts-ignore
-                         row = Math.floor(img.range.tl.nativeRow ?? img.range.tl.row ?? 0) + 1;
-                         // @ts-ignore
-                         col = Math.floor(img.range.tl.nativeCol ?? img.range.tl.col ?? 0) + 1;
-                    }
+                    const cell = worksheet.getCell(row, col);
                     
-                    if (row > 0 && col > 0) {
-                        const cell = worksheet.getCell(row, col);
-                        
-                        // Append text to cell
-                        const existingText = cell.text || '';
-                        // Format specifically so it stands out
-                        const newContent = `${existingText ? existingText + '\n\n' : ''}======= IMAGE TRANSLATION =======\n${translatedImgText}\n=================================`;
-                        
-                        cell.value = newContent;
-                        cell.alignment = { wrapText: true, vertical: 'top', horizontal: 'left' };
-                        
-                        // Add a comment to indicate image translation
-                        if (!cell.note) {
-                            cell.note = "Contains translated text extracted from the image at this location.";
-                        }
-                    } else {
-                         console.warn("Could not determine cell coordinates for image", img);
+                    // Append text to cell
+                    const existingText = cell.text || '';
+                    const newContent = `${existingText ? existingText + '\n\n' : ''}--- [IMAGE TRANS] ---\n${translatedImgText}\n----------------------`;
+                    
+                    cell.value = newContent;
+                    cell.alignment = { wrapText: true, vertical: 'top', horizontal: 'left' };
+                    // Add a comment to indicate image translation
+                    if (!cell.note) {
+                        cell.note = "Contains translated text from the image located here.";
                     }
                 }
-            } else {
-                console.warn(`Could not find media data for ImageID: ${mediaId}`);
             }
         } catch (err) {
             console.error("Failed to process Excel image", err);
