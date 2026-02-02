@@ -29,7 +29,7 @@ import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExc
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
 const APP_VERSION = "1.2.0 ";
-const APP_AUTHOR = "NDQuang2";
+const APP_AUTHOR = "NDQuang2 ";
 
 const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
