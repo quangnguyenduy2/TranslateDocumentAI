@@ -64,3 +64,10 @@ export enum SupportedLanguage {
   FRENCH = 'French',
   GERMAN = 'German',
 }
+
+export interface TourStep {
+  targetId: string;
+  title: string;
+  content: string;
+  position: 'top' | 'bottom' | 'left' | 'right';
+}

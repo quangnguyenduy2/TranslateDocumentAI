@@ -23,7 +23,8 @@ import {
   Import,
   Search,
   Edit2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  HelpCircle
 } from 'lucide-react';
 
 export const IconUpload = ({ className }: { className?: string }) => <Upload className={className} />;
@@ -50,3 +51,4 @@ export const IconSave = ({ className }: { className?: string }) => <Save classNa
 export const IconImport = ({ className }: { className?: string }) => <Import className={className} />;
 export const IconSearch = ({ className }: { className?: string }) => <Search className={className} />;
 export const IconEdit = ({ className }: { className?: string }) => <Edit2 className={className} />;
+export const IconHelp = ({ className }: { className?: string }) => <HelpCircle className={className} />;

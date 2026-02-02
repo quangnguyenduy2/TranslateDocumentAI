@@ -22,14 +22,23 @@ import {
   IconImport,
   IconSearch,
   IconEdit,
-  IconImage
+  IconImage,
+  IconHelp
 } from './components/Icons';
-import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem } from './types';
+import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, TourStep } from './types';
 import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
-const APP_VERSION = "1.2.0 ";
+const APP_VERSION = "1.3.1";
 const APP_AUTHOR = "NDQuang2 ";
+
+const TOUR_STEPS: TourStep[] = [
+  { targetId: 'tour-lang', title: 'Target Language', content: 'Select the language you want to translate your documents into.', position: 'bottom' },
+  { targetId: 'tour-glossary', title: 'Glossary Management', content: 'Define or import custom terms to ensure translation consistency.', position: 'bottom' },
+  { targetId: 'tour-context', title: 'Context Settings', content: 'Provide background information to help the AI understand your specific domain.', position: 'bottom' },
+  { targetId: 'tour-history', title: 'History', content: 'Access your recently translated files (saved for 24 hours).', position: 'bottom' },
+  { targetId: 'tour-upload', title: 'Upload Files', content: 'Drag and drop files here. We support Excel, Markdown, Text, and Images.', position: 'top' },
+];
 
 const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -47,6 +56,10 @@ const App: React.FC = () => {
   const [showContextModal, setShowContextModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
+
+  // Tour State
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -87,6 +100,12 @@ const App: React.FC = () => {
         } catch(e) {
           console.error("Failed to load history", e);
         }
+      }
+
+      // 3. Check Tour Status
+      const hasSeenTour = localStorage.getItem('d12_tour_seen');
+      if (!hasSeenTour) {
+        setTimeout(() => setTourActive(true), 1000);
       }
     };
     loadData();
@@ -331,6 +350,154 @@ const App: React.FC = () => {
 
     setGlobalStatus(AppStatus.COMPLETED);
     addLog('Batch processing finished.', 'success');
+  };
+
+  // --- TOUR LOGIC ---
+
+  const startTour = () => {
+    setTourStepIndex(0);
+    setTourActive(true);
+  };
+
+  const closeTour = () => {
+    setTourActive(false);
+    localStorage.setItem('d12_tour_seen', 'true');
+  };
+
+  const nextTourStep = () => {
+    if (tourStepIndex < TOUR_STEPS.length - 1) {
+      setTourStepIndex(tourStepIndex + 1);
+    } else {
+      closeTour();
+    }
+  };
+
+  const prevTourStep = () => {
+    if (tourStepIndex > 0) {
+      setTourStepIndex(tourStepIndex - 1);
+    }
+  };
+
+  const TourOverlay = () => {
+    const [spotlight, setSpotlight] = useState({ x: 0, y: 0, w: 0, h: 0 });
+    const [isReady, setIsReady] = useState(false);
+
+    // Effect for Tracking and Scrolling
+    useEffect(() => {
+      if (!tourActive) return;
+
+      const step = TOUR_STEPS[tourStepIndex];
+      const el = document.getElementById(step.targetId);
+      
+      if (el) {
+        // Smooth scroll to the target element when step changes
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Loop to constantly update spotlight position (handles scroll/resize smoothly)
+      let rafId: number;
+      const loop = () => {
+        const target = document.getElementById(step.targetId);
+        if (target) {
+          const rect = target.getBoundingClientRect();
+          // Add padding around the target
+          const padding = 6;
+          setSpotlight({
+            x: rect.left - padding,
+            y: rect.top - padding,
+            w: rect.width + padding * 2,
+            h: rect.height + padding * 2
+          });
+          setIsReady(true);
+        }
+        rafId = requestAnimationFrame(loop);
+      };
+      
+      loop();
+      return () => cancelAnimationFrame(rafId);
+    }, [tourActive, tourStepIndex]);
+
+    if (!tourActive || !isReady) return null;
+
+    const step = TOUR_STEPS[tourStepIndex];
+
+    return (
+      <div className="fixed inset-0 z-[100] overflow-hidden">
+        {/* SVG Mask Spotlight - Creates the "hole" in the dark overlay */}
+        <svg className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-1000">
+          <defs>
+            <mask id="tour-mask">
+              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              {/* The Hole: animate x, y, width, height for smooth transition between steps */}
+              <rect 
+                x={spotlight.x} 
+                y={spotlight.y} 
+                width={spotlight.w} 
+                height={spotlight.h} 
+                rx="12" 
+                fill="black" 
+                className="transition-all duration-1000 ease-out" 
+              />
+            </mask>
+          </defs>
+          <rect 
+            x="0" 
+            y="0" 
+            width="100%" 
+            height="100%" 
+            fill="rgba(0, 0, 0, 0.75)" 
+            mask="url(#tour-mask)" 
+          />
+        </svg>
+
+        {/* Glowing Highlight Border */}
+        <div 
+          style={{
+            transform: `translate(${spotlight.x}px, ${spotlight.y}px)`,
+            width: spotlight.w,
+            height: spotlight.h,
+          }}
+          className="absolute top-0 left-0 border-2 border-blue-400 rounded-xl shadow-[0_0_20px_rgba(59,130,246,0.6)] pointer-events-none transition-all duration-1000 ease-out animate-pulse"
+        />
+
+        {/* Tooltip Card - Positions itself relative to spotlight */}
+        <div 
+          className="absolute z-[101] transition-all duration-1000 ease-out"
+          style={{
+            top: step.position === 'bottom' ? spotlight.y + spotlight.h + 20 : 'auto',
+            bottom: step.position === 'top' ? (window.innerHeight - spotlight.y) + 20 : 'auto',
+            left: Math.max(16, Math.min(window.innerWidth - 340, spotlight.x)), // Keep within viewport width
+          }}
+        >
+          <div className="bg-slate-800 border border-blue-500/50 rounded-xl p-5 shadow-2xl w-[320px] animate-in zoom-in-95 fade-in duration-300">
+             <div className="flex items-center gap-3 mb-3">
+               <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">
+                 {tourStepIndex + 1}
+               </span>
+               <h4 className="font-bold text-blue-400">{step.title}</h4>
+             </div>
+             <p className="text-sm text-slate-300 mb-5 leading-relaxed">
+               {step.content}
+             </p>
+             <div className="flex justify-between items-center">
+               <button onClick={closeTour} className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-4">
+                 Skip
+               </button>
+               <div className="flex gap-2">
+                 {tourStepIndex > 0 && (
+                   <button onClick={prevTourStep} className="px-3 py-1.5 rounded text-xs font-medium bg-slate-700 hover:bg-slate-600 text-white transition-colors">
+                     Back
+                   </button>
+                 )}
+                 <button onClick={nextTourStep} className="px-4 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-lg shadow-blue-900/50">
+                   {tourStepIndex === TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
+                 </button>
+               </div>
+             </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // --- GLOSSARY MODAL (Updated for Import Wizard) ---
@@ -690,8 +857,6 @@ const App: React.FC = () => {
        let html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;'); // Escape HTML
        
        glossary.forEach(g => {
-         // Simple regex replace for glossary highlighting (case insensitive)
-         // Escape special regex chars in term
          const escapedTerm = g.translation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
          const regex = new RegExp(`(${escapedTerm})`, 'gi');
          html = html.replace(regex, '<span class="bg-yellow-500/20 text-yellow-200 border-b border-yellow-500/50">$1</span>');
@@ -760,7 +925,8 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col">
+    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col relative">
+      <TourOverlay />
       {/* Modals */}
       <GlossaryModal />
       <ContextModal />
@@ -778,14 +944,17 @@ const App: React.FC = () => {
             <p className="text-slate-400 text-sm mt-1">Smart Document Translation</p>
           </div>
           <div className="flex items-center gap-2">
-             <button onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300">
+             <button id="tour-glossary" onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300">
                <IconBook className="w-4 h-4" /> Glossary
              </button>
-             <button onClick={() => setShowContextModal(true)} className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors ${context ? 'bg-blue-900/30 text-blue-300 border-blue-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
+             <button id="tour-context" onClick={() => setShowContextModal(true)} className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors ${context ? 'bg-blue-900/30 text-blue-300 border-blue-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
                <IconSettings className="w-4 h-4" /> Context
              </button>
-             <button onClick={() => setShowHistoryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-purple-300">
+             <button id="tour-history" onClick={() => setShowHistoryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-purple-300">
                <IconHistory className="w-4 h-4" /> History
+             </button>
+             <button onClick={startTour} className="p-2 bg-slate-800 rounded-lg text-slate-500 hover:text-blue-400 transition-colors" title="Start Tour">
+                <IconHelp className="w-5 h-5" />
              </button>
           </div>
         </header>
@@ -795,7 +964,7 @@ const App: React.FC = () => {
           
           {/* Controls Bar */}
           <div className="p-6 border-b border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800/50">
-            <div className="flex items-center gap-2 w-full md:w-auto">
+            <div id="tour-lang" className="flex items-center gap-2 w-full md:w-auto">
               <IconLanguage className="text-blue-400 w-5 h-5" />
               <span className="text-sm font-medium text-slate-300 whitespace-nowrap">Target Language:</span>
               <select 
@@ -826,6 +995,7 @@ const App: React.FC = () => {
             {/* Upload Area */}
             {queue.length === 0 && (
               <div 
+                id="tour-upload"
                 className="border-2 border-dashed border-slate-600 rounded-xl p-10 text-center hover:border-blue-500 hover:bg-slate-800/80 transition-all cursor-pointer group"
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
