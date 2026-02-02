@@ -29,7 +29,7 @@ import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, Glossa
 import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.2.1";
 const APP_AUTHOR = "NDQuang2 ";
 
 const TOUR_STEPS: TourStep[] = [
