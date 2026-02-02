@@ -28,7 +28,7 @@ import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, Glossa
 import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.0 ";
 const APP_AUTHOR = "NDQuang2";
 
 const App: React.FC = () => {
