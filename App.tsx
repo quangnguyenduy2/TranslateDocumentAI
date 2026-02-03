@@ -3,6 +3,7 @@ import {
   IconUpload, 
   IconMarkdown, 
   IconExcel, 
+  IconPptx,
   IconLoading, 
   IconSuccess, 
   IconError,
@@ -26,10 +27,10 @@ import {
   IconHelp
 } from './components/Icons';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, TourStep } from './types';
-import { processMarkdown, processExcel, processImage, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
+import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
 const APP_AUTHOR = "NDQuang2 ";
 
 const TOUR_STEPS: TourStep[] = [
@@ -37,7 +38,7 @@ const TOUR_STEPS: TourStep[] = [
   { targetId: 'tour-glossary', title: 'Glossary Management', content: 'Define or import custom terms to ensure translation consistency.', position: 'bottom' },
   { targetId: 'tour-context', title: 'Context Settings', content: 'Provide background information to help the AI understand your specific domain.', position: 'bottom' },
   { targetId: 'tour-history', title: 'History', content: 'Access your recently translated files (saved for 24 hours).', position: 'bottom' },
-  { targetId: 'tour-upload', title: 'Upload Files', content: 'Drag and drop files here. We support Excel, Markdown, Text, and Images.', position: 'top' },
+  { targetId: 'tour-upload', title: 'Upload Files', content: 'Drag and drop files here. We support Excel, Markdown, PPTX, and Images.', position: 'top' },
 ];
 
 const App: React.FC = () => {
@@ -139,6 +140,7 @@ const App: React.FC = () => {
     const lower = fileName.toLowerCase();
     if (lower.endsWith('.md') || lower.endsWith('.txt')) return FileType.MARKDOWN;
     if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) return FileType.EXCEL;
+    if (lower.endsWith('.pptx')) return FileType.PPTX;
     if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) return FileType.IMAGE;
     return FileType.UNKNOWN;
   };
@@ -309,6 +311,8 @@ const App: React.FC = () => {
           const res = await processImage(item.file, targetLang, context, glossary, updateProgress);
           resultBlob = res.blob;
           translatedTextStr = res.translatedText;
+        } else if (item.type === FileType.PPTX) {
+          resultBlob = await processPptx(item.file, targetLang, context, glossary, updateProgress);
         } else {
           resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress);
         }
@@ -825,6 +829,7 @@ const App: React.FC = () => {
                        <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center">
                           {h.fileType === FileType.EXCEL ? <IconExcel className="w-4 h-4 text-green-400" /> : 
                            h.fileType === FileType.IMAGE ? <IconImage className="w-4 h-4 text-orange-400" /> :
+                           h.fileType === FileType.PPTX ? <IconPptx className="w-4 h-4 text-orange-500" /> :
                            <IconMarkdown className="w-4 h-4 text-blue-400" />}
                        </div>
                        <div>
@@ -891,7 +896,7 @@ const App: React.FC = () => {
                        <img src={URL.createObjectURL(previewItem.file)} alt="Original" className="max-w-full max-h-full object-contain rounded shadow-lg border border-slate-700" />
                      </div>
                    ) : (
-                     <div className="flex items-center justify-center h-full text-slate-500 italic">Preview not available for Excel source.</div>
+                     <div className="flex items-center justify-center h-full text-slate-500 italic">Preview not available for binary files.</div>
                    )}
                 </div>
              </div>
@@ -904,7 +909,7 @@ const App: React.FC = () => {
                       renderHighlightedText(previewItem.translatedText)
                    ) : (
                       <div className="flex items-center justify-center h-full text-slate-500 italic">
-                        {previewItem.type === FileType.EXCEL ? "Preview not available for Excel output." : "Translation not available."}
+                        {previewItem.type === FileType.EXCEL || previewItem.type === FileType.PPTX ? "Preview not available for this file type." : "Translation not available."}
                       </div>
                    )}
                 </div>
@@ -1001,12 +1006,12 @@ const App: React.FC = () => {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp" />
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.pptx,.png,.jpg,.jpeg,.webp" />
                 <div className="w-16 h-16 bg-slate-700 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform group-hover:bg-blue-500/20">
                   <IconUpload className="w-8 h-8 text-blue-400 group-hover:text-blue-300" />
                 </div>
                 <h3 className="text-xl font-semibold text-white mb-2">Click or Drag & Drop Files</h3>
-                <p className="text-slate-400 text-sm">Supported: Markdown, Text, Excel, Images (PNG/JPG)</p>
+                <p className="text-slate-400 text-sm">Supported: Markdown, Excel, PPTX, Images</p>
               </div>
             )}
 
@@ -1016,7 +1021,7 @@ const App: React.FC = () => {
                 {/* Add More */}
                 {globalStatus !== AppStatus.TRANSLATING && (
                   <div className="border border-dashed border-slate-600 rounded-lg p-3 flex items-center justify-center gap-2 text-slate-400 hover:text-blue-300 hover:border-blue-400 hover:bg-slate-800/50 cursor-pointer transition-all" onClick={() => fileInputRef.current?.click()}>
-                     <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp" />
+                     <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple accept=".md,.txt,.xlsx,.xls,.csv,.pptx,.png,.jpg,.jpeg,.webp" />
                      <IconUpload className="w-4 h-4" /> <span className="text-sm">Add more files</span>
                   </div>
                 )}
@@ -1028,6 +1033,7 @@ const App: React.FC = () => {
                         <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center shrink-0">
                           {item.type === FileType.EXCEL ? <IconExcel className="w-5 h-5 text-green-400" /> : 
                            item.type === FileType.IMAGE ? <IconImage className="w-5 h-5 text-orange-400" /> :
+                           item.type === FileType.PPTX ? <IconPptx className="w-5 h-5 text-orange-500" /> :
                            <IconMarkdown className="w-5 h-5 text-blue-400" />}
                         </div>
                         <div className="flex-1 min-w-0">

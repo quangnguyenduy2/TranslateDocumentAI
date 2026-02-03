@@ -24,12 +24,14 @@ import {
   Search,
   Edit2,
   Image as ImageIcon,
-  HelpCircle
+  HelpCircle,
+  Presentation
 } from 'lucide-react';
 
 export const IconUpload = ({ className }: { className?: string }) => <Upload className={className} />;
 export const IconMarkdown = ({ className }: { className?: string }) => <FileText className={className} />;
 export const IconExcel = ({ className }: { className?: string }) => <FileSpreadsheet className={className} />;
+export const IconPptx = ({ className }: { className?: string }) => <Presentation className={className} />;
 export const IconImage = ({ className }: { className?: string }) => <ImageIcon className={className} />;
 export const IconSuccess = ({ className }: { className?: string }) => <CheckCircle className={className} />;
 export const IconError = ({ className }: { className?: string }) => <AlertCircle className={className} />;

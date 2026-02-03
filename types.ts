@@ -9,6 +9,7 @@ export enum AppStatus {
 export enum FileType {
   MARKDOWN = 'MARKDOWN',
   EXCEL = 'EXCEL',
+  PPTX = 'PPTX',
   IMAGE = 'IMAGE',
   UNKNOWN = 'UNKNOWN',
 }
