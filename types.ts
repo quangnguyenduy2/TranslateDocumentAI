@@ -11,6 +11,7 @@ export enum FileType {
   EXCEL = 'EXCEL',
   PPTX = 'PPTX',
   IMAGE = 'IMAGE',
+  PDF = 'PDF',
   UNKNOWN = 'UNKNOWN',
 }
 
@@ -42,6 +43,7 @@ export interface FileQueueItem {
   resultBlob?: Blob;
   downloadUrl?: string;
   errorMessage?: string;
+  errorDetails?: string;
   isExpanded?: boolean; // UI state for excel configuration
   // For Preview / Compare
   originalText?: string; 
