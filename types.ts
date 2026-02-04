@@ -64,11 +64,5 @@ export enum SupportedLanguage {
   SPANISH = 'Spanish',
   FRENCH = 'French',
   GERMAN = 'German',
-}
-
-export interface TourStep {
-  targetId: string;
-  title: string;
-  content: string;
-  position: 'top' | 'bottom' | 'left' | 'right';
+  THAI = 'Thai',
 }

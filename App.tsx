@@ -1,4 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { driver } from 'driver.js';
+import 'driver.js/dist/driver.css';
 import { 
   IconUpload, 
   IconMarkdown, 
@@ -26,20 +28,12 @@ import {
   IconImage,
   IconHelp
 } from './components/Icons';
-import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, TourStep } from './types';
+import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem } from './types';
 import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
 
 const APP_VERSION = "1.3.0";
 const APP_AUTHOR = "NDQuang2 ";
-
-const TOUR_STEPS: TourStep[] = [
-  { targetId: 'tour-lang', title: 'Target Language', content: 'Select the language you want to translate your documents into.', position: 'bottom' },
-  { targetId: 'tour-glossary', title: 'Glossary Management', content: 'Define or import custom terms to ensure translation consistency.', position: 'bottom' },
-  { targetId: 'tour-context', title: 'Context Settings', content: 'Provide background information to help the AI understand your specific domain.', position: 'bottom' },
-  { targetId: 'tour-history', title: 'History', content: 'Access your recently translated files (saved for 24 hours).', position: 'bottom' },
-  { targetId: 'tour-upload', title: 'Upload Files', content: 'Drag and drop files here. We support Excel, Markdown, PPTX, and Images.', position: 'top' },
-];
 
 const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -58,11 +52,77 @@ const App: React.FC = () => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
 
-  // Tour State
-  const [tourActive, setTourActive] = useState(false);
-  const [tourStepIndex, setTourStepIndex] = useState(0);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Driver.js Tour Logic
+  const startTour = useCallback(() => {
+    const driverObj = driver({
+      showProgress: true,
+      showButtons: ['next', 'previous', 'close'],
+      steps: [
+        {
+          element: '#tour-welcome',
+          popover: {
+            title: 'Chào mừng đến với DocuTranslate AI',
+            description: 'Công cụ dịch tài liệu thông minh sử dụng Google Gemini AI. Hãy để chúng tôi hướng dẫn bạn qua các tính năng chính!',
+            side: 'bottom',
+            align: 'center'
+          }
+        },
+        {
+          element: '#tour-lang',
+          popover: {
+            title: 'Ngôn ngữ đích',
+            description: 'Chọn ngôn ngữ bạn muốn dịch tài liệu sang. Hỗ trợ 9 ngôn ngữ phổ biến nhất.',
+            side: 'bottom',
+            align: 'start'
+          }
+        },
+        {
+          element: '#tour-glossary',
+          popover: {
+            title: 'Quản lý Thuật ngữ',
+            description: 'Định nghĩa hoặc import các thuật ngữ chuyên ngành để đảm bảo bản dịch nhất quán và chính xác.',
+            side: 'bottom',
+            align: 'start'
+          }
+        },
+        {
+          element: '#tour-context',
+          popover: {
+            title: 'Cài đặt Ngữ cảnh',
+            description: 'Cung cấp thông tin nền để AI hiểu rõ lĩnh vực chuyên môn của bạn (y học, pháp lý, kỹ thuật...).',
+            side: 'bottom',
+            align: 'start'
+          }
+        },
+        {
+          element: '#tour-history',
+          popover: {
+            title: 'Lịch sử Dịch',
+            description: 'Truy cập các file đã dịch gần đây (lưu trong 24 giờ). Tải lại bất cứ lúc nào!',
+            side: 'bottom',
+            align: 'start'
+          }
+        },
+        {
+          element: '#tour-upload',
+          popover: {
+            title: 'Tải lên Tài liệu',
+            description: 'Kéo thả file vào đây hoặc click để chọn. Hỗ trợ Excel, Markdown, PowerPoint và Hình ảnh.',
+            side: 'top',
+            align: 'center'
+          }
+        }
+      ],
+      onDestroyStarted: () => {
+        localStorage.setItem('d12_tour_seen', 'true');
+        driverObj.destroy();
+      }
+    });
+
+    driverObj.drive();
+  }, []);
 
   // Load History & Glossary from Storage (IndexedDB)
   useEffect(() => {
@@ -103,14 +163,14 @@ const App: React.FC = () => {
         }
       }
 
-      // 3. Check Tour Status
+      // 3. Check Tour Status - Auto start for first-time users
       const hasSeenTour = localStorage.getItem('d12_tour_seen');
       if (!hasSeenTour) {
-        setTimeout(() => setTourActive(true), 1000);
+        setTimeout(() => startTour(), 1500);
       }
     };
     loadData();
-  }, []);
+  }, [startTour]);
 
   const handleSaveGlossary = async (newGlossary: GlossaryItem[]) => {
     setGlossary(newGlossary);
@@ -354,154 +414,6 @@ const App: React.FC = () => {
 
     setGlobalStatus(AppStatus.COMPLETED);
     addLog('Batch processing finished.', 'success');
-  };
-
-  // --- TOUR LOGIC ---
-
-  const startTour = () => {
-    setTourStepIndex(0);
-    setTourActive(true);
-  };
-
-  const closeTour = () => {
-    setTourActive(false);
-    localStorage.setItem('d12_tour_seen', 'true');
-  };
-
-  const nextTourStep = () => {
-    if (tourStepIndex < TOUR_STEPS.length - 1) {
-      setTourStepIndex(tourStepIndex + 1);
-    } else {
-      closeTour();
-    }
-  };
-
-  const prevTourStep = () => {
-    if (tourStepIndex > 0) {
-      setTourStepIndex(tourStepIndex - 1);
-    }
-  };
-
-  const TourOverlay = () => {
-    const [spotlight, setSpotlight] = useState({ x: 0, y: 0, w: 0, h: 0 });
-    const [isReady, setIsReady] = useState(false);
-
-    // Effect for Tracking and Scrolling
-    useEffect(() => {
-      if (!tourActive) return;
-
-      const step = TOUR_STEPS[tourStepIndex];
-      const el = document.getElementById(step.targetId);
-      
-      if (el) {
-        // Smooth scroll to the target element when step changes
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-
-      // Loop to constantly update spotlight position (handles scroll/resize smoothly)
-      let rafId: number;
-      const loop = () => {
-        const target = document.getElementById(step.targetId);
-        if (target) {
-          const rect = target.getBoundingClientRect();
-          // Add padding around the target
-          const padding = 6;
-          setSpotlight({
-            x: rect.left - padding,
-            y: rect.top - padding,
-            w: rect.width + padding * 2,
-            h: rect.height + padding * 2
-          });
-          setIsReady(true);
-        }
-        rafId = requestAnimationFrame(loop);
-      };
-      
-      loop();
-      return () => cancelAnimationFrame(rafId);
-    }, [tourActive, tourStepIndex]);
-
-    if (!tourActive || !isReady) return null;
-
-    const step = TOUR_STEPS[tourStepIndex];
-
-    return (
-      <div className="fixed inset-0 z-[100] overflow-hidden">
-        {/* SVG Mask Spotlight - Creates the "hole" in the dark overlay */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-1000">
-          <defs>
-            <mask id="tour-mask">
-              <rect x="0" y="0" width="100%" height="100%" fill="white" />
-              {/* The Hole: animate x, y, width, height for smooth transition between steps */}
-              <rect 
-                x={spotlight.x} 
-                y={spotlight.y} 
-                width={spotlight.w} 
-                height={spotlight.h} 
-                rx="12" 
-                fill="black" 
-                className="transition-all duration-1000 ease-out" 
-              />
-            </mask>
-          </defs>
-          <rect 
-            x="0" 
-            y="0" 
-            width="100%" 
-            height="100%" 
-            fill="rgba(0, 0, 0, 0.75)" 
-            mask="url(#tour-mask)" 
-          />
-        </svg>
-
-        {/* Glowing Highlight Border */}
-        <div 
-          style={{
-            transform: `translate(${spotlight.x}px, ${spotlight.y}px)`,
-            width: spotlight.w,
-            height: spotlight.h,
-          }}
-          className="absolute top-0 left-0 border-2 border-blue-400 rounded-xl shadow-[0_0_20px_rgba(59,130,246,0.6)] pointer-events-none transition-all duration-1000 ease-out animate-pulse"
-        />
-
-        {/* Tooltip Card - Positions itself relative to spotlight */}
-        <div 
-          className="absolute z-[101] transition-all duration-1000 ease-out"
-          style={{
-            top: step.position === 'bottom' ? spotlight.y + spotlight.h + 20 : 'auto',
-            bottom: step.position === 'top' ? (window.innerHeight - spotlight.y) + 20 : 'auto',
-            left: Math.max(16, Math.min(window.innerWidth - 340, spotlight.x)), // Keep within viewport width
-          }}
-        >
-          <div className="bg-slate-800 border border-blue-500/50 rounded-xl p-5 shadow-2xl w-[320px] animate-in zoom-in-95 fade-in duration-300">
-             <div className="flex items-center gap-3 mb-3">
-               <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">
-                 {tourStepIndex + 1}
-               </span>
-               <h4 className="font-bold text-blue-400">{step.title}</h4>
-             </div>
-             <p className="text-sm text-slate-300 mb-5 leading-relaxed">
-               {step.content}
-             </p>
-             <div className="flex justify-between items-center">
-               <button onClick={closeTour} className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-4">
-                 Skip
-               </button>
-               <div className="flex gap-2">
-                 {tourStepIndex > 0 && (
-                   <button onClick={prevTourStep} className="px-3 py-1.5 rounded text-xs font-medium bg-slate-700 hover:bg-slate-600 text-white transition-colors">
-                     Back
-                   </button>
-                 )}
-                 <button onClick={nextTourStep} className="px-4 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-lg shadow-blue-900/50">
-                   {tourStepIndex === TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
-                 </button>
-               </div>
-             </div>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   // --- GLOSSARY MODAL (Updated for Import Wizard) ---
@@ -931,7 +843,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col relative">
-      <TourOverlay />
       {/* Modals */}
       <GlossaryModal />
       <ContextModal />
@@ -941,7 +852,7 @@ const App: React.FC = () => {
       <div className="max-w-4xl mx-auto space-y-8 flex-1 w-full">
         
         {/* Header with Tools */}
-        <header className="flex flex-col md:flex-row justify-between items-center gap-4">
+        <header id="tour-welcome" className="flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="text-center md:text-left">
             <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
               DocuTranslate AI
