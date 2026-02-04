@@ -293,31 +293,27 @@ export const processExcel = async (
       
       onProgress(`Translating cell batch ${currentBatchNumber}/${totalBatches}...`, currentPercent);
 
-      try {
-        const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary);
+      // translateBatchStrings now has built-in retry + fallback, guaranteed to return translations
+      const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary);
 
-        batchItems.forEach((item, idx) => {
-          const translatedText = translatedTexts[idx];
-          if (translatedText) {
-             const worksheet = workbook.getWorksheet(item.sheetName);
-             if (worksheet) {
-               const cell = worksheet.getCell(item.cellAddress);
-                if (hasFormattingTags(translatedText)) {
-                    cell.value = taggedStringToRichText(translatedText);
-                } else {
-                    cell.value = translatedText;
-                }
-                // Visual cue for translated cells
-                if (!cell.border) {
-                    cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-                }
-             }
+      batchItems.forEach((item, idx) => {
+        const translatedText = translatedTexts[idx];
+        if (translatedText) {
+          const worksheet = workbook.getWorksheet(item.sheetName);
+          if (worksheet) {
+            const cell = worksheet.getCell(item.cellAddress);
+            if (hasFormattingTags(translatedText)) {
+              cell.value = taggedStringToRichText(translatedText);
+            } else {
+              cell.value = translatedText;
+            }
+            // Visual cue for translated cells
+            if (!cell.border) {
+              cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            }
           }
-        });
-
-      } catch (e) {
-        console.error(`Error processing batch ${currentBatchNumber}`, e);
-      }
+        }
+      });
     }
   }
 

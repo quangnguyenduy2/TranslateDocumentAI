@@ -111,18 +111,43 @@ export const translateBatchStrings = async (
   const relevantGlossary = filterRelevantGlossary(texts.join(' '), glossary);
   const prompt = `${buildSystemInstruction(targetLang, context, relevantGlossary)}\n\nTranslate this JSON array of strings. Maintain order.`;
   
-  try {
-    const response = await ai.models.generateContent({
-      model: MODEL_FAST,
-      contents: { parts: [{ text: prompt }, { text: JSON.stringify(texts) }] },
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: { translations: { type: Type.ARRAY, items: { type: Type.STRING } } }
+  // Retry with exponential backoff (3 attempts)
+  let lastError: any;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: MODEL_FAST,
+        contents: { parts: [{ text: prompt }, { text: JSON.stringify(texts) }] },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: { translations: { type: Type.ARRAY, items: { type: Type.STRING } } }
+          }
         }
+      });
+      const translations = JSON.parse(response.text || '{}').translations;
+      if (translations && Array.isArray(translations) && translations.length === texts.length) {
+        return translations;
       }
-    });
-    return JSON.parse(response.text || '{}').translations || texts;
-  } catch { return texts; }
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 500)); // 1s, 2s backoff
+      }
+    }
+  }
+  
+  // Fallback: translate individually to ensure 100% success
+  console.warn('Batch translation failed after 3 retries, falling back to individual translation');
+  const individualTranslations = await Promise.all(
+    texts.map(async (text) => {
+      try {
+        return await translateText(text, targetLang, context, glossary);
+      } catch {
+        return text; // Last resort: return original
+      }
+    })
+  );
+  return individualTranslations;
 };
