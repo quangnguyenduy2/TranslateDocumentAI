@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SupportedLanguage, GlossaryItem } from "../types";
+import { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
+import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector';
 
 // Always use process.env.API_KEY directly as per guidelines
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -290,28 +291,35 @@ export const translateText = async (
   targetLang: SupportedLanguage,
   context: string = '',
   glossary: GlossaryItem[] = [],
-  sourceLangOverride?: string // Optional: 'auto' uses detectLanguage(), or specify 'vi'/'ja'/'en' etc.
+  sourceLangOverride?: string, // Optional: 'auto' uses detectLanguage(), or specify 'vi'/'ja'/'en' etc.
+  blacklist: BlacklistItem[] = [] // NEW: Blacklist for sensitive data protection
 ): Promise<string> => {
   if (!text.trim()) return '';
   
-  // Detect source language (or use override if provided)
+  // STEP 1: Mask sensitive data BEFORE any processing
+  const { maskedText, protectionMap } = maskText(text, blacklist);
+  
+  // STEP 2: Detect source language (or use override if provided)
   const sourceLang = sourceLangOverride && sourceLangOverride !== 'auto' 
     ? sourceLangOverride 
-    : detectLanguage(text);
+    : detectLanguage(maskedText);
   
-  // Extract placeholders to save tokens (smart: based on source→target)
-  const { cleanedText, placeholders } = extractPlaceholders(text, sourceLang, targetLang);
+  // STEP 3: Extract placeholders to save tokens (smart: based on source→target)
+  const { cleanedText, placeholders } = extractPlaceholders(maskedText, sourceLang, targetLang);
   
-  // If nothing left to translate (all placeholders), return original
-  const textToTranslate = cleanedText.replace(/__P\d+__/g, '').trim();
+  // If nothing left to translate (all placeholders), unmask and return original
+  const textToTranslate = cleanedText.replace(/__P\d+__/g, '').replace(/__PROTECTED_\d+__/g, '').trim();
   if (textToTranslate.length === 0) {
-    return text;
+    return unmaskText(text, protectionMap);
   }
   
   const relevantGlossary = filterRelevantGlossary(cleanedText, glossary);
   const instruction = buildSystemInstruction(targetLang, context, relevantGlossary);
-  const prompt = placeholders.length > 0
-    ? `${instruction}\n\nTranslate this (keep __P0__, __P1__, etc. as-is):\n${cleanedText}`
+  
+  // Add instruction to keep both __P__ and __PROTECTED__ placeholders
+  const hasPlaceholders = placeholders.length > 0 || Object.keys(protectionMap).length > 0;
+  const prompt = hasPlaceholders
+    ? `${instruction}\n\nTranslate this (keep __P0__, __P1__, __PROTECTED_0__, __PROTECTED_1__, etc. as-is):\n${cleanedText}`
     : `${instruction}\n\nTranslate this:\n${cleanedText}`;
   
   const response = await ai.models.generateContent({ model: MODEL_FAST, contents: prompt });
@@ -325,8 +333,11 @@ export const translateText = async (
   
   const translated = response.text?.replace(/^```markdown\s*|```$/g, '') || cleanedText;
   
-  // Restore placeholders if any
-  return placeholders.length > 0 ? restorePlaceholders(translated, placeholders) : translated;
+  // STEP 4: Restore language-specific placeholders
+  const restoredPlaceholders = placeholders.length > 0 ? restorePlaceholders(translated, placeholders) : translated;
+  
+  // STEP 5: Unmask sensitive data
+  return unmaskText(restoredPlaceholders, protectionMap);
 };
 
 export const translateBatchStrings = async (
@@ -334,25 +345,29 @@ export const translateBatchStrings = async (
   targetLang: SupportedLanguage,
   context: string = '',
   glossary: GlossaryItem[] = [],
-  sourceLangOverride?: string // Optional: 'auto' uses detectLanguage(), or specify 'vi'/'ja'/'en' etc.
+  sourceLangOverride?: string, // Optional: 'auto' uses detectLanguage(), or specify 'vi'/'ja'/'en' etc.
+  blacklist: BlacklistItem[] = [] // NEW: Blacklist for sensitive data protection
 ): Promise<string[]> => {
   if (texts.length === 0) return [];
   
-  // Detect source language from first non-empty text (or use override if provided)
-  const firstText = texts.find(t => t.trim().length > 0) || '';
+  // STEP 1: Mask all texts with shared protection map
+  const { maskedTexts, protectionMap: globalProtectionMap } = maskBatchTexts(texts, blacklist);
+  
+  // STEP 2: Detect source language from first non-empty text (or use override if provided)
+  const firstText = maskedTexts.find(t => t.trim().length > 0) || '';
   const sourceLang = sourceLangOverride && sourceLangOverride !== 'auto'
     ? sourceLangOverride
     : detectLanguage(firstText);
   
-  // Extract placeholders from all texts (smart: based on source→target)
-  const extractedData = texts.map(text => extractPlaceholders(text, sourceLang, targetLang));
+  // STEP 3: Extract placeholders from all texts (smart: based on source→target)
+  const extractedData = maskedTexts.map(text => extractPlaceholders(text, sourceLang, targetLang));
   const cleanedTexts = extractedData.map(d => d.cleanedText);
   
   const relevantGlossary = filterRelevantGlossary(cleanedTexts.join(' '), glossary);
   const instruction = buildSystemInstruction(targetLang, context, relevantGlossary);
-  const hasPlaceholders = extractedData.some(d => d.placeholders.length > 0);
+  const hasPlaceholders = extractedData.some(d => d.placeholders.length > 0) || Object.keys(globalProtectionMap).length > 0;
   const prompt = hasPlaceholders
-    ? `${instruction}\n\nTranslate this JSON array. Keep __P0__, __P1__ placeholders as-is. Maintain order.`
+    ? `${instruction}\n\nTranslate this JSON array. Keep __P0__, __P1__, __PROTECTED_0__, __PROTECTED_1__ placeholders as-is. Maintain order.`
     : `${instruction}\n\nTranslate this JSON array of strings. Maintain order.`;
   
   // Retry with exponential backoff (3 attempts with longer delays)
@@ -385,12 +400,15 @@ export const translateBatchStrings = async (
       
       const translations = JSON.parse(response.text || '{}').translations;
       if (translations && Array.isArray(translations) && translations.length === texts.length) {
-        // Restore placeholders for all translations
-        return translations.map((translated, index) =>
+        // STEP 4: Restore language-specific placeholders for all translations
+        const restoredTranslations = translations.map((translated, index) =>
           extractedData[index].placeholders.length > 0
             ? restorePlaceholders(translated, extractedData[index].placeholders)
             : translated
         );
+        
+        // STEP 5: Unmask sensitive data
+        return unmaskBatchTexts(restoredTranslations, globalProtectionMap);
       }
     } catch (error) {
       lastError = error;
@@ -425,7 +443,7 @@ export const translateBatchStrings = async (
   const individualTranslations = await Promise.all(
     texts.map(async (text) => {
       try {
-        return await translateText(text, targetLang, context, glossary);
+        return await translateText(text, targetLang, context, glossary, sourceLangOverride, blacklist);
       } catch (error) {
         // Check quota exhaustion in individual translation
         const errorData = parseApiError(error);

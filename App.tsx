@@ -32,11 +32,12 @@ import {
   IconEdit,
   IconImage,
   IconHelp,
-  IconRefresh
+  IconRefresh,
+  IconShield
 } from './components/Icons';
-import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem } from './types';
-import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, ExcelPreviewData } from './services/fileProcessing';
-import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB } from './services/storage';
+import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
+import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData } from './services/fileProcessing';
+import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB, saveBlacklistToDB, getBlacklistFromDB, clearBlacklistDB } from './services/storage';
 
 const APP_VERSION = "1.3.0";
 const APP_AUTHOR = "NDQuang2 ";
@@ -54,8 +55,13 @@ const App: React.FC = () => {
   const [context, setContext] = useState<string>('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   
+  // Blacklist Protection
+  const [blacklist, setBlacklist] = useState<BlacklistItem[]>([]);
+  const [blacklistEnabled, setBlacklistEnabled] = useState<boolean>(true);
+  
   // Modal States
   const [showGlossaryModal, setShowGlossaryModal] = useState(false);
+  const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
@@ -141,6 +147,14 @@ const App: React.FC = () => {
         setGlossary(storedGlossary);
       } catch (e) {
         console.error("Failed to load glossary from DB", e);
+      }
+
+      // 2. Load Blacklist from IDB
+      try {
+        const storedBlacklist = await getBlacklistFromDB();
+        setBlacklist(storedBlacklist);
+      } catch (e) {
+        console.error("Failed to load blacklist from DB", e);
       }
 
       // 2. Load History from LocalStorage + IDB
@@ -483,7 +497,9 @@ const App: React.FC = () => {
         } else if (item.type === FileType.PPTX) {
           resultBlob = await processPptx(item.file, targetLang, context, glossary, updateProgress);
         } else {
-          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated, sourceLang);
+          // Pass blacklist only if enabled
+          const activeBlacklist = blacklistEnabled ? blacklist : [];
+          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated, sourceLang, activeBlacklist);
         }
 
         const url = URL.createObjectURL(resultBlob);
@@ -892,6 +908,354 @@ const App: React.FC = () => {
     );
   };
 
+  const BlacklistModal = () => {
+    const [term, setTerm] = useState('');
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [caseSensitive, setCaseSensitive] = useState(false);
+    
+    // Import wizard states
+    const [importStep, setImportStep] = useState<'upload' | 'mapping'>('upload');
+    const [importFile, setImportFile] = useState<File | null>(null);
+    const [importLoading, setImportLoading] = useState(false);
+    const [previewData, setPreviewData] = useState<ExcelPreviewData | null>(null);
+    const [termColIndex, setTermColIndex] = useState(-1);
+    const blacklistFileRef = useRef<HTMLInputElement>(null);
+
+    const handleSaveTerm = async () => {
+      if (!term.trim()) return;
+      
+      if (editingId) {
+        setBlacklist(prev => prev.map(b => b.id === editingId ? { ...b, term: term.trim(), caseSensitive } : b));
+        setEditingId(null);
+      } else {
+        const newItem: BlacklistItem = {
+          id: Math.random().toString(36).substr(2, 9),
+          term: term.trim(),
+          caseSensitive,
+          enabled: true
+        };
+        setBlacklist(prev => [...prev, newItem]);
+      }
+      
+      setTerm('');
+      setCaseSensitive(false);
+      
+      try {
+        await saveBlacklistToDB(editingId ? blacklist.map(b => b.id === editingId ? { ...b, term: term.trim(), caseSensitive } : b) : [...blacklist, { id: Math.random().toString(36).substr(2, 9), term: term.trim(), caseSensitive, enabled: true }]);
+      } catch (e) {
+        console.error('Failed to save blacklist', e);
+      }
+    };
+
+    const removeTerm = async (id: string) => {
+      const updated = blacklist.filter(b => b.id !== id);
+      setBlacklist(updated);
+      try {
+        await saveBlacklistToDB(updated);
+      } catch (e) {
+        console.error('Failed to update blacklist', e);
+      }
+    };
+
+    const toggleEnabled = async (id: string) => {
+      const updated = blacklist.map(b => b.id === id ? { ...b, enabled: !b.enabled } : b);
+      setBlacklist(updated);
+      try {
+        await saveBlacklistToDB(updated);
+      } catch (e) {
+        console.error('Failed to update blacklist', e);
+      }
+    };
+
+    const startEdit = (item: BlacklistItem) => {
+      setEditingId(item.id);
+      setTerm(item.term);
+      setCaseSensitive(item.caseSensitive || false);
+    };
+
+    const cancelEdit = () => {
+      setEditingId(null);
+      setTerm('');
+      setCaseSensitive(false);
+    };
+
+    const clearBlacklistData = async () => {
+      if (!confirm('Delete all protected terms? This cannot be undone.')) return;
+      setBlacklist([]);
+      try {
+        await clearBlacklistDB();
+      } catch (e) {
+        console.error('Failed to clear blacklist', e);
+      }
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setImportFile(file);
+      setImportLoading(true);
+      
+      try {
+        const preview = await getExcelPreview(file);
+        setPreviewData(preview);
+        setImportStep('mapping');
+        setTermColIndex(-1);
+      } catch (error) {
+        console.error('Failed to parse Excel:', error);
+        alert('Failed to read Excel file. Please check the format.');
+      } finally {
+        setImportLoading(false);
+      }
+    };
+
+    const handleConfirmImport = async () => {
+      if (!importFile || termColIndex === -1) return;
+      
+      setImportLoading(true);
+      try {
+        const items = await parseBlacklistFromExcel(importFile, termColIndex);
+        setBlacklist(prev => [...prev, ...items]);
+        await saveBlacklistToDB([...blacklist, ...items]);
+        alert(`Imported ${items.length} protected terms!`);
+        setImportStep('upload');
+        setImportFile(null);
+        setPreviewData(null);
+      } catch (error) {
+        console.error('Import failed:', error);
+        alert('Import failed. Please check the file format.');
+      } finally {
+        setImportLoading(false);
+      }
+    };
+
+    const filteredBlacklist = blacklist.filter(b => 
+      b.term.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    if (!showBlacklistModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+        <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+            <h3 className="font-bold text-lg text-white flex items-center gap-2">
+              <IconShield className="w-5 h-5 text-red-400"/> 
+              Blacklist Protection
+            </h3>
+            <button onClick={() => setShowBlacklistModal(false)}>
+              <IconClose className="text-slate-400 hover:text-white" />
+            </button>
+          </div>
+          
+          <div className="p-4 flex-1 overflow-hidden flex flex-col md:flex-row gap-6">
+            
+            {/* LEFT PANEL: INPUT / LIST */}
+            <div className="flex-1 flex flex-col gap-4 overflow-hidden border-r border-slate-700/50 pr-4">
+              {/* Input Form */}
+              <div className="flex flex-col gap-2 bg-slate-700/20 p-3 rounded border border-slate-700/50">
+                <input 
+                  value={term} 
+                  onChange={e => setTerm(e.target.value)} 
+                  placeholder="Protected term (e.g., Project X, john@email.com)" 
+                  className="bg-slate-900 border border-slate-700 rounded p-2 text-sm outline-none focus:border-red-500" 
+                />
+                <label className="flex items-center gap-2 text-xs text-slate-400">
+                  <input 
+                    type="checkbox" 
+                    checked={caseSensitive} 
+                    onChange={e => setCaseSensitive(e.target.checked)}
+                    className="w-3 h-3 rounded"
+                  />
+                  Case sensitive
+                </label>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={handleSaveTerm} 
+                    className={`flex-1 ${editingId ? 'bg-orange-600 hover:bg-orange-500' : 'bg-red-600 hover:bg-red-500'} p-2 rounded text-white text-sm transition-colors flex items-center justify-center gap-2`}
+                  >
+                    {editingId ? <><IconSave className="w-4 h-4" /> Update</> : <><IconPlus className="w-4 h-4" /> Add Term</>}
+                  </button>
+                  {editingId && (
+                    <button onClick={cancelEdit} className="bg-slate-600 hover:bg-slate-500 p-2 rounded text-white">
+                      <IconClose className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Search */}
+              <div className="relative">
+                <IconSearch className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+                <input 
+                  value={searchTerm} 
+                  onChange={e => setSearchTerm(e.target.value)} 
+                  placeholder="Search..." 
+                  className="w-full bg-slate-900 border border-slate-700 rounded pl-9 p-2 text-sm outline-none focus:border-red-500"
+                />
+              </div>
+              
+              {/* List */}
+              <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar min-h-[200px] border border-slate-700/50 rounded p-2 bg-slate-900/30">
+                {blacklist.length === 0 ? 
+                  <p className="text-slate-500 text-sm italic text-center mt-8">No protected terms. Add one or import from Excel.</p> : 
+                  filteredBlacklist.length === 0 ? 
+                  <p className="text-slate-500 text-sm italic text-center mt-8">No matches.</p> :
+                  filteredBlacklist.map(b => (
+                    <div key={b.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingId === b.id ? 'border border-orange-500/50 bg-orange-900/10' : 'bg-slate-700/50'}`}>
+                      <div className="flex items-center gap-2 flex-1">
+                        <input 
+                          type="checkbox" 
+                          checked={b.enabled !== false} 
+                          onChange={() => toggleEnabled(b.id)}
+                          className="w-4 h-4 rounded"
+                        />
+                        <span className={`text-red-300 font-medium ${b.enabled === false ? 'line-through opacity-50' : ''}`}>
+                          {b.term}
+                        </span>
+                        {b.caseSensitive && <span className="text-[10px] bg-slate-600 px-1 py-0.5 rounded text-slate-300">Aa</span>}
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => startEdit(b)} className="text-slate-400 hover:text-orange-400 p-1">
+                          <IconEdit className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => removeTerm(b.id)} className="text-slate-400 hover:text-red-400 p-1">
+                          <IconTrash className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-500">
+                <span>Total: {blacklist.length} terms ({blacklist.filter(b => b.enabled !== false).length} active)</span>
+                {blacklist.length > 0 && (
+                  <button onClick={clearBlacklistData} className="text-red-400 hover:underline">
+                    Delete All
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT PANEL: IMPORT WIZARD */}
+            <div className="w-full md:w-[450px] flex flex-col gap-4 bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+              <h4 className="font-bold text-white flex items-center gap-2 border-b border-slate-700 pb-2">
+                <IconExcel className="w-5 h-5 text-green-400" /> 
+                Bulk Import (Excel)
+              </h4>
+
+              {importStep === 'upload' && (
+                <div 
+                  className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-700 rounded-lg hover:bg-slate-800/50 transition-colors p-8 cursor-pointer" 
+                  onClick={() => blacklistFileRef.current?.click()}
+                >
+                  <input 
+                    type="file" 
+                    accept=".xlsx" 
+                    ref={blacklistFileRef} 
+                    className="hidden" 
+                    onChange={handleFileSelect} 
+                  />
+                  {importLoading ? 
+                    <IconLoading className="w-8 h-8 text-red-400 mb-2" /> : 
+                    <IconImport className="w-8 h-8 text-slate-500 mb-2" />
+                  }
+                  <p className="text-sm font-medium text-slate-300">Click to upload Excel</p>
+                  <p className="text-xs text-slate-500 text-center mt-1">
+                    1 column: Protected Term<br/>
+                    Row 1 must be header
+                  </p>
+                </div>
+              )}
+
+              {importStep === 'mapping' && previewData && (
+                <div className="flex-1 flex flex-col gap-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-400 bg-slate-800 px-2 py-1 rounded">
+                      File: {importFile?.name}
+                    </span>
+                    <button 
+                      onClick={() => { setImportStep('upload'); setImportFile(null); }} 
+                      className="text-xs text-red-400 hover:underline"
+                    >
+                      Change File
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">
+                      Column for <b>Protected Term</b>:
+                    </label>
+                    <select 
+                      value={termColIndex} 
+                      onChange={e => setTermColIndex(Number(e.target.value))} 
+                      className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-sm text-white"
+                    >
+                      <option value={-1}>-- Select Column --</option>
+                      {previewData.headers.map((h, idx) => (
+                        <option key={idx} value={idx}>{h}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex-1 overflow-auto border border-slate-700 rounded bg-slate-900">
+                    <table className="w-full text-left text-xs text-slate-300">
+                      <thead className="bg-slate-800 text-slate-400 font-medium sticky top-0">
+                        <tr>
+                          {previewData.headers.map((h, i) => (
+                            <th 
+                              key={i} 
+                              className={`p-2 border-b border-slate-700 whitespace-nowrap ${i === termColIndex ? 'bg-red-900/30 text-red-300' : ''}`}
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewData.sampleRows.map((row, rIdx) => (
+                          <tr key={rIdx} className="border-b border-slate-800 last:border-0">
+                            {row.map((cell, cIdx) => (
+                              <td 
+                                key={cIdx} 
+                                className={`p-2 truncate max-w-[200px] ${cIdx === termColIndex ? 'bg-red-900/10' : ''}`}
+                              >
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {previewData.totalRowsEstimate > 6 && (
+                      <div className="p-2 text-center text-[10px] text-slate-500 italic bg-slate-800/50">
+                        + approx {previewData.totalRowsEstimate - 6} more rows
+                      </div>
+                    )}
+                  </div>
+
+                  <button 
+                    onClick={handleConfirmImport} 
+                    disabled={importLoading || termColIndex === -1}
+                    className="w-full py-2 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded font-medium text-sm flex items-center justify-center gap-2 transition-all"
+                  >
+                    {importLoading ? 
+                      <IconLoading className="w-4 h-4" /> : 
+                      <IconImport className="w-4 h-4" />
+                    }
+                    Import Protected Terms
+                  </button>
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const PreviewModal = () => {
     const [selectedSheet, setSelectedSheet] = useState(0);
     const [excelData, setExcelData] = useState<XLSX.WorkBook | null>(null);
@@ -1223,6 +1587,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8 flex flex-col relative">
       {/* Modals */}
       <GlossaryModal />
+      <BlacklistModal />
       <ContextModal />
       <HistoryModal />
       <PreviewModal />
@@ -1240,6 +1605,9 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
              <button id="tour-glossary" onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300">
                <IconBook className="w-4 h-4" /> Glossary
+             </button>
+             <button id="tour-blacklist" onClick={() => setShowBlacklistModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-red-300">
+               <IconShield className="w-4 h-4" /> Blacklist ({blacklist.length})
              </button>
              <button id="tour-context" onClick={() => setShowContextModal(true)} className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors ${context ? 'bg-blue-900/30 text-blue-300 border-blue-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
                <IconSettings className="w-4 h-4" /> Context
@@ -1309,6 +1677,20 @@ const App: React.FC = () => {
                 />
                 <span className="text-xs text-slate-400 group-hover:text-slate-300 transition-colors">
                   Smart mode: Skip already translated content <span className="text-green-400">(saves 50-70% tokens)</span>
+                </span>
+              </label>
+              
+              {/* Blacklist Protection Toggle */}
+              <label className="flex items-center gap-2 cursor-pointer group ml-7">
+                <input 
+                  type="checkbox"
+                  checked={blacklistEnabled}
+                  onChange={(e) => setBlacklistEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-red-600 focus:ring-2 focus:ring-red-500 cursor-pointer"
+                  disabled={globalStatus === AppStatus.TRANSLATING}
+                />
+                <span className="text-xs text-slate-400 group-hover:text-slate-300 transition-colors">
+                  🛡️ Protect sensitive data <span className="text-red-400">({blacklist.length} terms)</span>
                 </span>
               </label>
             </div>

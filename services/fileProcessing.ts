@@ -1,7 +1,7 @@
 
 import ExcelJS from 'exceljs';
 import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64, detectLanguage } from './geminiService';
-import { SupportedLanguage, GlossaryItem } from '../types';
+import { SupportedLanguage, GlossaryItem, BlacklistItem } from '../types';
 import { processPptx } from './pptxProcessor';
 
 export { processPptx };
@@ -171,6 +171,35 @@ export const parseGlossaryByColumns = async (
   return items;
 };
 
+export const parseBlacklistFromExcel = async (
+  file: File,
+  termColIndex: number // 0-based index for "Protected Term" column
+): Promise<BlacklistItem[]> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
+  const worksheet = workbook.worksheets[0];
+
+  const items: BlacklistItem[] = [];
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // Skip Header
+
+    const term = getGlossaryCellString(row.getCell(termColIndex + 1)).trim();
+
+    if (term) {
+      items.push({
+        id: Math.random().toString(36).substr(2, 9),
+        term,
+        caseSensitive: false,
+        enabled: true
+      });
+    }
+  });
+
+  return items;
+};
+
 // --- MAIN PROCESSING ---
 
 export const getExcelSheetNames = async (file: File): Promise<string[]> => {
@@ -235,7 +264,8 @@ export const processExcel = async (
   glossary: GlossaryItem[],
   onProgress: (msg: string, percent: number) => void,
   skipAlreadyTranslated: boolean = true,
-  sourceLang: string = 'auto' // 'auto' or language code
+  sourceLang: string = 'auto', // 'auto' or language code
+  blacklist: BlacklistItem[] = [] // NEW: Blacklist for sensitive data protection
 ): Promise<Blob> => {
   onProgress('Loading Excel file...', 5);
   const workbook = new ExcelJS.Workbook();
@@ -320,7 +350,7 @@ export const processExcel = async (
       onProgress(`Translating cell batch ${currentBatchNumber}/${totalBatches}...`, currentPercent);
 
       // translateBatchStrings now has built-in retry + fallback, guaranteed to return translations
-      const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary, sourceLang);
+      const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary, sourceLang, blacklist);
 
       batchItems.forEach((item, idx) => {
         const translatedText = translatedTexts[idx];
@@ -437,7 +467,7 @@ export const processExcel = async (
       
       if (sheetsToTranslate.length > 0) {
         onProgress(`Translating ${sheetsToTranslate.length}/${selectedSheets.length} sheet names...`, 95);
-        const translatedNames = await translateBatchStrings(sheetsToTranslate, targetLang, context, glossary, sourceLang);
+        const translatedNames = await translateBatchStrings(sheetsToTranslate, targetLang, context, glossary, sourceLang, blacklist);
         
         translatedNames.forEach((newName, translatedIdx) => {
           const originalIdx = sheetIndexMap[translatedIdx];

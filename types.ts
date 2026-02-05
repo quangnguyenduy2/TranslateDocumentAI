@@ -21,6 +21,13 @@ export interface GlossaryItem {
   translation: string;
 }
 
+export interface BlacklistItem {
+  id: string;
+  term: string;
+  caseSensitive?: boolean;
+  enabled?: boolean;
+}
+
 export interface HistoryItem {
   id: string;
   fileName: string;
