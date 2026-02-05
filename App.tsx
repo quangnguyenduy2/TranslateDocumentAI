@@ -45,6 +45,7 @@ const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [queue, setQueue] = useState<FileQueueItem[]>([]);
   const [targetLang, setTargetLang] = useState<SupportedLanguage>(SupportedLanguage.VIETNAMESE);
+  const [skipAlreadyTranslated, setSkipAlreadyTranslated] = useState<boolean>(true); // Smart mode: skip cells already in target language
   const [logs, setLogs] = useState<LogEntry[]>([]);
   
   // New State Features
@@ -206,32 +207,30 @@ const App: React.FC = () => {
   const getDetailedErrorMessage = (error: any): { message: string; details: string } => {
     if (!error) return { message: 'Unknown error occurred', details: 'No error information available' };
     
-    // API/Network errors
-    if (error.message?.includes('fetch') || error.message?.includes('network')) {
+    // Parse error using helper function
+    const errorData = parseError(error);
+    
+    // If we have an error code (and it's not 200), use API's message directly
+    if (errorData.code && errorData.code !== 200) {
+      return { 
+        message: `API Error ${errorData.code}`, 
+        details: errorData.message || 'An API error occurred during translation' 
+      };
+    }
+    
+    // Fallback: pattern matching on error message for non-API errors
+    const errorMsg = errorData.message;
+    
+    // Network errors
+    if (errorMsg.includes('fetch') || errorMsg.includes('network')) {
       return { 
         message: 'Network Connection Error', 
         details: 'Cannot connect to translation service. Please check your internet connection.' 
       };
     }
     
-    // API Key errors
-    if (error.message?.includes('API key') || error.message?.includes('401') || error.message?.includes('unauthorized')) {
-      return { 
-        message: 'API Authentication Failed', 
-        details: 'Invalid or missing Gemini API key. Please check your .env.local file.' 
-      };
-    }
-    
-    // Rate limit errors
-    if (error.message?.includes('429') || error.message?.includes('rate limit') || error.message?.includes('quota')) {
-      return { 
-        message: 'API Rate Limit Exceeded', 
-        details: 'Too many requests. Please wait a moment and try again.' 
-      };
-    }
-    
     // File parsing errors
-    if (error.message?.includes('parse') || error.message?.includes('invalid') || error.message?.includes('corrupt')) {
+    if (errorMsg.includes('parse') || errorMsg.includes('invalid') || errorMsg.includes('corrupt')) {
       return { 
         message: 'File Processing Error', 
         details: 'Cannot read file content. The file may be corrupted or in an unsupported format.' 
@@ -239,7 +238,7 @@ const App: React.FC = () => {
     }
     
     // Timeout errors
-    if (error.message?.includes('timeout') || error.message?.includes('ETIMEDOUT')) {
+    if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
       return { 
         message: 'Request Timeout', 
         details: 'Translation took too long. Try with a smaller file or retry.' 
@@ -247,11 +246,30 @@ const App: React.FC = () => {
     }
     
     // Generic error
-    const errorMsg = error instanceof Error ? error.message : String(error);
     return { 
       message: 'Translation Error', 
       details: errorMsg || 'An unexpected error occurred during translation' 
     };
+  };
+
+
+  // Parse error properly and use API's message directly
+  const parseError = (error: any) => {
+    // Gemini API error format
+    if (error?.error?.code) {
+      return {
+        code: error.error.code,
+        message: error.error.message || 'Unknown API error',
+        status: error.error.status
+      };
+    }
+    
+    // Standard Error object
+    if (error instanceof Error) {
+      return { code: null, message: error.message, status: null };
+    }
+    
+    return { code: null, message: String(error), status: null };
   };
 
   const getFileType = (fileName: string): FileType => {
@@ -454,7 +472,7 @@ const App: React.FC = () => {
         } else if (item.type === FileType.PPTX) {
           resultBlob = await processPptx(item.file, targetLang, context, glossary, updateProgress);
         } else {
-          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress);
+          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated);
         }
 
         const url = URL.createObjectURL(resultBlob);
@@ -486,6 +504,8 @@ const App: React.FC = () => {
       } catch (error) {
         console.error('Translation error:', error);
         const errorInfo = getDetailedErrorMessage(error);
+        
+        // Update current item status to ERROR
         setQueue(prev => prev.map(q => q.id === item.id ? { 
           ...q, 
           status: AppStatus.ERROR, 
@@ -494,6 +514,17 @@ const App: React.FC = () => {
           progressMessage: 'Failed'
         } : q));
         addLog(`${errorInfo.message}: ${item.file.name} - ${errorInfo.details}`, 'error');
+        
+        // Check if this is a critical error (quota exhausted, auth failure, etc.)
+        const errorData = parseError(error);
+        const isCriticalError = errorData.code === 429 || errorData.code === 401 || errorData.code === 403;
+        
+        if (isCriticalError) {
+          console.error('🛑 CRITICAL ERROR DETECTED - Stopping all processing');
+          setGlobalStatus(AppStatus.ERROR);
+          addLog('⛔ Processing stopped due to critical API error', 'error');
+          return; // Stop processing remaining files
+        }
       }
     }
 
@@ -1215,20 +1246,36 @@ const App: React.FC = () => {
         <div className="bg-slate-800 rounded-2xl shadow-xl overflow-hidden border border-slate-700">
           
           {/* Controls Bar */}
-          <div className="p-6 border-b border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800/50">
-            <div id="tour-lang" className="flex items-center gap-2 w-full md:w-auto">
-              <IconLanguage className="text-blue-400 w-5 h-5" />
-              <span className="text-sm font-medium text-slate-300 whitespace-nowrap">Target Language:</span>
-              <select 
-                value={targetLang}
-                onChange={(e) => setTargetLang(e.target.value as SupportedLanguage)}
-                className="bg-slate-700 border-none rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none w-full md:w-48 text-white cursor-pointer hover:bg-slate-600 transition-colors"
-                disabled={globalStatus === AppStatus.TRANSLATING}
-              >
-                {Object.values(SupportedLanguage).map((lang) => (
-                  <option key={lang} value={lang}>{lang}</option>
-                ))}
-              </select>
+          <div className="p-6 border-b border-slate-700 flex flex-col md:flex-row justify-between items-start gap-4 bg-slate-800/50">
+            <div className="flex flex-col gap-3 w-full md:w-auto">
+              <div id="tour-lang" className="flex items-center gap-2 w-full md:w-auto">
+                <IconLanguage className="text-blue-400 w-5 h-5" />
+                <span className="text-sm font-medium text-slate-300 whitespace-nowrap">Target Language:</span>
+                <select 
+                  value={targetLang}
+                  onChange={(e) => setTargetLang(e.target.value as SupportedLanguage)}
+                  className="bg-slate-700 border-none rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none w-full md:w-48 text-white cursor-pointer hover:bg-slate-600 transition-colors"
+                  disabled={globalStatus === AppStatus.TRANSLATING}
+                >
+                  {Object.values(SupportedLanguage).map((lang) => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+              </div>
+              
+              {/* Smart Translation Mode Toggle */}
+              <label className="flex items-center gap-2 cursor-pointer group ml-7">
+                <input 
+                  type="checkbox"
+                  checked={skipAlreadyTranslated}
+                  onChange={(e) => setSkipAlreadyTranslated(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  disabled={globalStatus === AppStatus.TRANSLATING}
+                />
+                <span className="text-xs text-slate-400 group-hover:text-slate-300 transition-colors">
+                  Smart mode: Skip already translated content <span className="text-green-400">(saves 50-70% tokens)</span>
+                </span>
+              </label>
             </div>
             
             <div className="flex items-center gap-4">

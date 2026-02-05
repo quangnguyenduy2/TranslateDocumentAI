@@ -1,6 +1,6 @@
 
 import ExcelJS from 'exceljs';
-import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64 } from './geminiService';
+import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64, detectLanguage } from './geminiService';
 import { SupportedLanguage, GlossaryItem } from '../types';
 import { processPptx } from './pptxProcessor';
 
@@ -233,13 +233,14 @@ export const processExcel = async (
   selectedSheets: string[],
   context: string,
   glossary: GlossaryItem[],
-  onProgress: (msg: string, percent: number) => void
+  onProgress: (msg: string, percent: number) => void,
+  skipAlreadyTranslated: boolean = true
 ): Promise<Blob> => {
   onProgress('Loading Excel file...', 5);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(arrayBuffer);
 
-  // 1. Collect all translatable content (Text)
+  // 1. Collect all translatable content (Text) with per-sheet tracking
   onProgress('Analyzing cells...', 10);
   
   interface TranslatableItem {
@@ -249,16 +250,32 @@ export const processExcel = async (
   }
 
   const allItems: TranslatableItem[] = [];
+  const totalSheets = selectedSheets.length;
 
-  for (const sheetName of selectedSheets) {
+  for (let sheetIndex = 0; sheetIndex < selectedSheets.length; sheetIndex++) {
+    const sheetName = selectedSheets[sheetIndex];
     const worksheet = workbook.getWorksheet(sheetName);
     if (!worksheet) continue;
+
+    // Progress: Show which sheet is being analyzed
+    onProgress(`Analyzing sheet ${sheetIndex + 1}/${totalSheets}: "${sheetName}"...`, 10 + Math.floor((sheetIndex / totalSheets) * 5));
 
     worksheet.eachRow((row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
         if (cell.type === ExcelJS.ValueType.String || cell.type === ExcelJS.ValueType.RichText) {
           const taggedText = richTextToTaggedString(cell.value);
           if (taggedText && taggedText.trim().length > 0 && !taggedText.startsWith('=')) {
+            // Smart language detection: skip cells already in target language (if enabled)
+            if (skipAlreadyTranslated) {
+              const detectedLang = detectLanguage(taggedText);
+              const targetLangCode = targetLang.toLowerCase().substring(0, 2); // 'Vietnamese' -> 'vi'
+              
+              // Skip if already translated (e.g., Vietnamese text when target is Vietnamese)
+              if (detectedLang === targetLangCode) {
+                return; // Skip this cell, save tokens!
+              }
+            }
+            
             allItems.push({
               sheetName,
               cellAddress: cell.address,
@@ -268,18 +285,26 @@ export const processExcel = async (
         }
       });
     });
+    
+    // Inter-sheet delay to avoid overwhelming API (especially for large files)
+    if (sheetIndex < selectedSheets.length - 1) {
+      await new Promise(r => setTimeout(r, 1000)); // 1s delay between sheets
+    }
   }
 
   const totalItems = allItems.length;
   
   // 2. Translate Text in batches
   if (totalItems > 0) {
-    const startPercent = 10;
+    const startPercent = 15;
     const endPercent = 80; // Reserve some progress for images
     const progressRange = endPercent - startPercent;
 
-    const BATCH_SIZE = 40;
+    // Dynamic batch size: reduce for large files to avoid rate limits
+    const BATCH_SIZE = selectedSheets.length > 20 ? 20 : 40;
     const totalBatches = Math.ceil(totalItems / BATCH_SIZE);
+    
+    onProgress(`Starting translation of ${totalItems} cells in ${totalBatches} batches (batch size: ${BATCH_SIZE})...`, startPercent);
     
     for (let i = 0; i < totalItems; i += BATCH_SIZE) {
       const batchItems = allItems.slice(i, i + BATCH_SIZE);
@@ -314,6 +339,11 @@ export const processExcel = async (
           }
         }
       });
+      
+      // Add small delay between batches for large files to prevent rate limiting
+      if (i + BATCH_SIZE < totalItems && selectedSheets.length > 10) {
+        await new Promise(r => setTimeout(r, 500)); // 0.5s delay between batches
+      }
     }
   }
 
@@ -383,22 +413,58 @@ export const processExcel = async (
 
   // 4. Translate Sheet Names
   if (selectedSheets.length > 0) {
-      onProgress('Translating sheet names...', 95);
-      try {
-          const translatedNames = await translateBatchStrings(selectedSheets, targetLang, context, glossary);
-          selectedSheets.forEach((oldName, idx) => {
-              const newName = translatedNames[idx];
-              if (newName && newName !== oldName) {
-                  let cleanName = newName.replace(/[\[\]\*\/\\\?]/g, '').substring(0, 31).trim();
-                  if (cleanName && !workbook.getWorksheet(cleanName)) {
-                      const ws = workbook.getWorksheet(oldName);
-                      if (ws) ws.name = cleanName;
-                  }
+    onProgress('Translating sheet names...', 95);
+    try {
+      // Smart mode: Filter out sheets already in target language
+      const sheetsToTranslate: string[] = [];
+      const sheetIndexMap: number[] = []; // Track original indices
+      
+      selectedSheets.forEach((sheetName, idx) => {
+        if (skipAlreadyTranslated) {
+          const detectedLang = detectLanguage(sheetName);
+          const targetLangCode = targetLang.toLowerCase().substring(0, 2);
+          
+          if (detectedLang !== targetLangCode) {
+            sheetsToTranslate.push(sheetName);
+            sheetIndexMap.push(idx);
+          }
+        } else {
+          sheetsToTranslate.push(sheetName);
+          sheetIndexMap.push(idx);
+        }
+      });
+      
+      if (sheetsToTranslate.length > 0) {
+        onProgress(`Translating ${sheetsToTranslate.length}/${selectedSheets.length} sheet names...`, 95);
+        const translatedNames = await translateBatchStrings(sheetsToTranslate, targetLang, context, glossary);
+        
+        translatedNames.forEach((newName, translatedIdx) => {
+          const originalIdx = sheetIndexMap[translatedIdx];
+          const oldName = selectedSheets[originalIdx];
+          
+          if (newName && newName !== oldName) {
+            // Clean invalid characters: [ ] * / \ ?
+            // Excel sheet names: max 31 chars
+            let cleanName = newName.replace(/[\[\]\*\/\\\?:]/g, '').substring(0, 31).trim();
+            
+            // Avoid duplicate names
+            if (cleanName && !workbook.getWorksheet(cleanName)) {
+              const ws = workbook.getWorksheet(oldName);
+              if (ws) {
+                ws.name = cleanName;
+                console.log(`Renamed sheet: "${oldName}" → "${cleanName}"`);
               }
-          });
-      } catch (e) {
-          console.error("Sheet name translation failed", e);
+            }
+          }
+        });
+      } else {
+        onProgress('All sheet names already in target language, skipping...', 96);
       }
+    } catch (e) {
+      console.error("Sheet name translation failed", e);
+      // Don't fail entire process if sheet names can't be translated
+      onProgress('Sheet name translation failed, continuing...', 96);
+    }
   }
 
   onProgress('Finalizing file...', 98);
