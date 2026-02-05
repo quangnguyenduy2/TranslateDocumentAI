@@ -3,8 +3,23 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
 import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector';
 
-// Always use process.env.API_KEY directly as per guidelines
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+/**
+ * Get API key with priority: User's key (LocalStorage) → Default env key
+ */
+const getApiKey = (): string => {
+  const userKey = localStorage.getItem('user_api_key');
+  return userKey || process.env.API_KEY || '';
+};
+
+// Initialize AI with dynamic API key
+let ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+/**
+ * Reinitialize AI client with new API key
+ */
+export const reinitializeAI = () => {
+  ai = new GoogleGenAI({ apiKey: getApiKey() });
+};
 
 const MODEL_FAST = 'gemini-3-flash-preview';
 const MODEL_IMAGE = 'gemini-2.5-flash-image';

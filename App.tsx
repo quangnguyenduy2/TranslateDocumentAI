@@ -33,7 +33,8 @@ import {
   IconImage,
   IconHelp,
   IconRefresh,
-  IconShield
+  IconShield,
+  IconKey
 } from './components/Icons';
 import { TestDashboard } from './components/TestDashboard';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
@@ -59,6 +60,10 @@ const App: React.FC = () => {
   // Blacklist Protection
   const [blacklist, setBlacklist] = useState<BlacklistItem[]>([]);
   const [blacklistEnabled, setBlacklistEnabled] = useState<boolean>(true);
+  
+  // API Key Management
+  const [userApiKey, setUserApiKey] = useState<string>('');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   
   // Modal States
   const [showGlossaryModal, setShowGlossaryModal] = useState(false);
@@ -143,6 +148,12 @@ const App: React.FC = () => {
   // Load History & Glossary from Storage (IndexedDB)
   useEffect(() => {
     const loadData = async () => {
+      // 0. Load User API Key from LocalStorage
+      const savedApiKey = localStorage.getItem('user_api_key');
+      if (savedApiKey) {
+        setUserApiKey(savedApiKey);
+      }
+
       // 1. Load Glossary from IDB
       try {
         const storedGlossary = await getGlossaryFromDB();
@@ -921,6 +932,134 @@ const App: React.FC = () => {
     );
   };
 
+  const ApiKeyModal = () => {
+    const [inputKey, setInputKey] = useState(userApiKey || '');
+    
+    const handleSaveApiKey = (key: string) => {
+      const trimmedKey = key.trim();
+      if (trimmedKey) {
+        localStorage.setItem('user_api_key', trimmedKey);
+        setUserApiKey(trimmedKey);
+        addLog('API key saved successfully! Reloading...', 'success');
+      } else {
+        localStorage.removeItem('user_api_key');
+        setUserApiKey('');
+        addLog('API key removed! Using default key. Reloading...', 'success');
+      }
+      setTimeout(() => window.location.reload(), 1000);
+    };
+
+    if (!showApiKeyModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+        <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+          <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+            <div>
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <IconKey className="w-5 h-5 text-yellow-400" />
+                API Key Settings
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                {userApiKey ? '🔑 Using your personal API key' : '🌐 Using default API key'}
+              </p>
+            </div>
+            <button onClick={() => setShowApiKeyModal(false)}>
+              <IconClose className="text-slate-400 hover:text-white" />
+            </button>
+          </div>
+          
+          <div className="p-4 space-y-3">
+            <div>
+              <label className="text-sm text-slate-300 block mb-2 font-medium">
+                Your Gemini API Key (Optional)
+              </label>
+              <input
+                type="password"
+                value={inputKey}
+                onChange={(e) => setInputKey(e.target.value)}
+                placeholder="AIza..."
+                className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-sm text-white outline-none focus:border-blue-500 transition-colors"
+              />
+              <p className="text-xs text-slate-500 mt-2">
+                Leave empty to use default key. Get your free key at:{' '}
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:underline"
+                >
+                  Google AI Studio ↗
+                </a>
+              </p>
+            </div>
+            
+            {userApiKey && (
+              <div className="bg-green-900/20 border border-green-500/30 rounded p-3 text-xs text-green-300 flex items-start gap-2">
+                <span>✓</span>
+                <div>
+                  <div className="font-medium">Custom API key is active</div>
+                  <div className="text-green-400/70 mt-1">
+                    Key: {userApiKey.substring(0, 8)}...{userApiKey.substring(userApiKey.length - 4)}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {!userApiKey && (
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded p-3 text-xs text-blue-300">
+                ℹ️ Currently using the default API key (shared with other users)
+              </div>
+            )}
+          </div>
+          
+          <div className="p-4 border-t border-slate-700 flex gap-2 justify-between">
+            <button
+              onClick={() => {
+                if (confirm('Clear API key from storage? This will reload the page and use the default key.')) {
+                  localStorage.removeItem('user_api_key');
+                  setUserApiKey('');
+                  addLog('API key cleared from storage', 'success');
+                  setTimeout(() => window.location.reload(), 500);
+                }
+              }}
+              className="px-3 py-2 bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/50 rounded text-sm text-orange-300 transition-colors flex items-center gap-2"
+              title="Clear API key without reloading (useful if key is invalid)"
+            >
+              <IconTrash className="w-3 h-3" />
+              Clear Storage
+            </button>
+            
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowApiKeyModal(false)}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm text-white transition-colors"
+              >
+                Cancel
+              </button>
+              {userApiKey && (
+                <button
+                  onClick={() => handleSaveApiKey('')}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded text-sm text-white transition-colors flex items-center gap-2"
+                >
+                  <IconTrash className="w-3 h-3" />
+                  Remove Key
+                </button>
+              )}
+              <button
+                onClick={() => handleSaveApiKey(inputKey)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white transition-colors flex items-center gap-2"
+              >
+                <IconSave className="w-3 h-3" />
+                Save & Reload
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const BlacklistModal = () => {
     const [term, setTerm] = useState('');
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -1604,6 +1743,7 @@ const App: React.FC = () => {
       <ContextModal />
       <HistoryModal />
       <PreviewModal />
+      <ApiKeyModal />
       {showTestDashboard && <TestDashboard onClose={() => setShowTestDashboard(false)} />}
 
       <div className="max-w-4xl mx-auto space-y-8 flex-1 w-full">
@@ -1617,19 +1757,32 @@ const App: React.FC = () => {
             <p className="text-slate-400 text-sm mt-1">Smart Document Translation</p>
           </div>
           <div className="flex items-center gap-2">
-             <button id="tour-glossary" onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300">
-               <IconBook className="w-4 h-4" /> Glossary
+             <button id="tour-glossary" onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300 min-w-[100px] justify-center">
+               <IconBook className="w-4 h-4" /> 
+               <span>Glossary</span>
              </button>
-             <button id="tour-blacklist" onClick={() => setShowBlacklistModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-red-300">
-               <IconShield className="w-4 h-4" /> Blacklist ({blacklist.length})
+             <button id="tour-blacklist" onClick={() => setShowBlacklistModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-red-300 min-w-[100px] justify-center">
+               <IconShield className="w-4 h-4" /> 
+               <span>Blacklist</span>
+               {blacklist.length > 0 && <span className="ml-1 bg-red-500/20 px-1.5 py-0.5 rounded text-xs">{blacklist.length}</span>}
              </button>
-             <button id="tour-context" onClick={() => setShowContextModal(true)} className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors ${context ? 'bg-blue-900/30 text-blue-300 border-blue-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
-               <IconSettings className="w-4 h-4" /> Context
+             <button id="tour-context" onClick={() => setShowContextModal(true)} className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors min-w-[100px] justify-center ${context ? 'bg-blue-900/30 text-blue-300 border-blue-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
+               <IconSettings className="w-4 h-4" /> 
+               <span>Context</span>
              </button>
-             <button id="tour-history" onClick={() => setShowHistoryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-purple-300">
-               <IconHistory className="w-4 h-4" /> History
+             <button id="tour-history" onClick={() => setShowHistoryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-purple-300 min-w-[100px] justify-center">
+               <IconHistory className="w-4 h-4" /> 
+               <span>History</span>
              </button>
-             <button onClick={startTour} className="p-2 bg-slate-800 rounded-lg text-slate-500 hover:text-blue-400 transition-colors" title="Start Tour">
+             <button 
+               onClick={() => setShowApiKeyModal(true)} 
+               className={`flex items-center gap-2 px-3 py-2 border border-slate-700 rounded-lg text-sm transition-colors min-w-[100px] justify-center ${userApiKey ? 'bg-green-900/30 text-green-300 border-green-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
+               title={userApiKey ? 'Using personal API key' : 'Using default API key'}
+             >
+               <IconKey className="w-4 h-4" /> 
+               <span>Key</span>
+             </button>
+             <button onClick={startTour} className="flex items-center justify-center p-2 w-10 h-10 bg-slate-800 rounded-lg text-slate-500 hover:text-blue-400 transition-colors" title="Start Tour">
                 <IconHelp className="w-5 h-5" />
              </button>
           </div>
