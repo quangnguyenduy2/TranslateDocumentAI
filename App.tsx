@@ -44,6 +44,7 @@ const APP_AUTHOR = "NDQuang2 ";
 const App: React.FC = () => {
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [queue, setQueue] = useState<FileQueueItem[]>([]);
+  const [sourceLang, setSourceLang] = useState<string>('auto'); // 'auto' or language code (vi, ja, en, ko, zh)
   const [targetLang, setTargetLang] = useState<SupportedLanguage>(SupportedLanguage.VIETNAMESE);
   const [skipAlreadyTranslated, setSkipAlreadyTranslated] = useState<boolean>(true); // Smart mode: skip cells already in target language
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -482,7 +483,7 @@ const App: React.FC = () => {
         } else if (item.type === FileType.PPTX) {
           resultBlob = await processPptx(item.file, targetLang, context, glossary, updateProgress);
         } else {
-          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated);
+          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated, sourceLang);
         }
 
         const url = URL.createObjectURL(resultBlob);
@@ -1258,9 +1259,33 @@ const App: React.FC = () => {
           {/* Controls Bar */}
           <div className="p-6 border-b border-slate-700 flex flex-col md:flex-row justify-between items-start gap-4 bg-slate-800/50">
             <div className="flex flex-col gap-3 w-full md:w-auto">
+              {/* From Language Dropdown */}
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <IconLanguage className="text-purple-400 w-5 h-5" />
+                <span className="text-sm font-medium text-slate-300 whitespace-nowrap">From Language:</span>
+                <select 
+                  value={sourceLang}
+                  onChange={(e) => setSourceLang(e.target.value)}
+                  className="bg-slate-700 border-none rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-purple-500 outline-none w-full md:w-48 text-white cursor-pointer hover:bg-slate-600 transition-colors"
+                  disabled={globalStatus === AppStatus.TRANSLATING}
+                >
+                  <option value="auto">Auto Detect</option>
+                  <option value="vi">Vietnamese</option>
+                  <option value="en">English</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="zh">Chinese</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="th">Thai</option>
+                </select>
+              </div>
+              
+              {/* To Language Dropdown */}
               <div id="tour-lang" className="flex items-center gap-2 w-full md:w-auto">
                 <IconLanguage className="text-blue-400 w-5 h-5" />
-                <span className="text-sm font-medium text-slate-300 whitespace-nowrap">Target Language:</span>
+                <span className="text-sm font-medium text-slate-300 whitespace-nowrap">To Language:</span>
                 <select 
                   value={targetLang}
                   onChange={(e) => setTargetLang(e.target.value as SupportedLanguage)}

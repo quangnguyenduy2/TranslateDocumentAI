@@ -234,7 +234,8 @@ export const processExcel = async (
   context: string,
   glossary: GlossaryItem[],
   onProgress: (msg: string, percent: number) => void,
-  skipAlreadyTranslated: boolean = true
+  skipAlreadyTranslated: boolean = true,
+  sourceLang: string = 'auto' // 'auto' or language code
 ): Promise<Blob> => {
   onProgress('Loading Excel file...', 5);
   const workbook = new ExcelJS.Workbook();
@@ -319,7 +320,7 @@ export const processExcel = async (
       onProgress(`Translating cell batch ${currentBatchNumber}/${totalBatches}...`, currentPercent);
 
       // translateBatchStrings now has built-in retry + fallback, guaranteed to return translations
-      const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary);
+      const translatedTexts = await translateBatchStrings(batchTexts, targetLang, context, glossary, sourceLang);
 
       batchItems.forEach((item, idx) => {
         const translatedText = translatedTexts[idx];
@@ -436,7 +437,7 @@ export const processExcel = async (
       
       if (sheetsToTranslate.length > 0) {
         onProgress(`Translating ${sheetsToTranslate.length}/${selectedSheets.length} sheet names...`, 95);
-        const translatedNames = await translateBatchStrings(sheetsToTranslate, targetLang, context, glossary);
+        const translatedNames = await translateBatchStrings(sheetsToTranslate, targetLang, context, glossary, sourceLang);
         
         translatedNames.forEach((newName, translatedIdx) => {
           const originalIdx = sheetIndexMap[translatedIdx];
