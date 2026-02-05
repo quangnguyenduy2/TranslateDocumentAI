@@ -35,6 +35,7 @@ import {
   IconRefresh,
   IconShield
 } from './components/Icons';
+import { TestDashboard } from './components/TestDashboard';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
 import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB, saveBlacklistToDB, getBlacklistFromDB, clearBlacklistDB } from './services/storage';
@@ -64,6 +65,7 @@ const App: React.FC = () => {
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showTestDashboard, setShowTestDashboard] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -192,6 +194,17 @@ const App: React.FC = () => {
       }
     };
     loadData();
+
+    // Keyboard shortcut for Test Dashboard: Ctrl+Shift+T
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+        e.preventDefault();
+        setShowTestDashboard(true);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [startTour]);
 
   const handleSaveGlossary = async (newGlossary: GlossaryItem[]) => {
@@ -1591,6 +1604,7 @@ const App: React.FC = () => {
       <ContextModal />
       <HistoryModal />
       <PreviewModal />
+      {showTestDashboard && <TestDashboard onClose={() => setShowTestDashboard(false)} />}
 
       <div className="max-w-4xl mx-auto space-y-8 flex-1 w-full">
         
@@ -1866,10 +1880,20 @@ const App: React.FC = () => {
       
       {/* Footer */}
       <footer className="w-full max-w-4xl mx-auto mt-8 py-4 border-t border-slate-800 text-center text-slate-600 text-xs">
-         <div className="flex justify-center items-center gap-4">
-            <span>DocuTranslate AI v{APP_VERSION}</span>
-            <span>•</span>
-            <span>Created by {APP_AUTHOR}</span>
+         <div className="flex flex-col items-center gap-3">
+            <button 
+              onClick={() => setShowTestDashboard(true)}
+              className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-blue-400 transition-all flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-700 hover:border-blue-500"
+              title="Open System Health Dashboard (Ctrl+Shift+T)"
+            >
+              <IconSettings className="w-4 h-4" />
+              <span className="font-medium">System Health</span>
+            </button>
+            <div className="flex items-center gap-4">
+              <span>DocuTranslate AI v{APP_VERSION}</span>
+              <span>•</span>
+              <span>Created by {APP_AUTHOR}</span>
+            </div>
          </div>
       </footer>
     </div>
