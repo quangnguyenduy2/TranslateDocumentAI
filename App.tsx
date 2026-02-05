@@ -357,11 +357,12 @@ const App: React.FC = () => {
           const names = await getExcelSheetNames(item.file);
           setQueue(prev => prev.map(q => {
             if (q.id === item.id) {
-              return { ...q, availableSheets: names, selectedSheets: names, isExpanded: false };
+              // Don't pre-select any sheets, let user choose
+              return { ...q, availableSheets: names, selectedSheets: [], isExpanded: false };
             }
             return q;
           }));
-          addLog(`Loaded sheets for ${item.file.name}`, 'info');
+          addLog(`Loaded ${names.length} sheets for ${item.file.name}`, 'info');
         } catch (e) {
           console.error(e);
           addLog(`Failed to load sheets for ${item.file.name}`, 'error');
@@ -439,6 +440,15 @@ const App: React.FC = () => {
   const processQueue = async () => {
     const itemsToProcess = queue.filter(item => item.status === AppStatus.IDLE || item.status === AppStatus.ERROR);
     if (itemsToProcess.length === 0) return;
+
+    // Check if any Excel file has more than 5 sheets selected
+    for (const item of itemsToProcess) {
+      if (item.type === FileType.EXCEL && item.selectedSheets.length > 5) {
+        addLog(`Error: ${item.file.name} has ${item.selectedSheets.length} sheets selected. Maximum 5 sheets allowed.`, 'error');
+        alert(`Cannot translate ${item.file.name}:\n\nYou have selected ${item.selectedSheets.length} sheets, but the maximum allowed is 5 sheets.\n\nPlease deselect some sheets and try again.`);
+        return;
+      }
+    }
 
     setGlobalStatus(AppStatus.TRANSLATING);
     addLog(`Starting batch translation of ${itemsToProcess.length} files...`);
