@@ -44,7 +44,7 @@ import { LoginPage } from './components/LoginPage';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
 import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB } from './services/storage';
-import { authAPI, userDataAPI } from './services/apiClient';
+import apiClient, { authAPI, userDataAPI } from './services/apiClient';
 
 const APP_VERSION = "1.3.0";
 const APP_AUTHOR = "NDQuang2 ";
@@ -1944,7 +1944,7 @@ const App: React.FC = () => {
       {/* Admin Panel - Only accessible by admin users */}
       {showAdminPanel && user?.role?.name === 'admin' && (
         <AdminPage 
-          apiClient={import('./services/apiClient').then(m => m.default)} 
+          apiClient={apiClient} 
           onClose={() => setShowAdminPanel(false)} 
         />
       )}
@@ -1958,6 +1958,26 @@ const App: React.FC = () => {
               DocuTranslate AI
             </h1>
             <p className="text-slate-400 text-sm mt-1">Smart Document Translation</p>
+            {user && (
+              <div className="flex items-center gap-2 mt-2 text-xs">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/80 border border-slate-700 rounded-md">
+                  <span className="text-slate-500">👤</span>
+                  <span className="text-slate-300">{user.email}</span>
+                </div>
+                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
+                  user.role?.name === 'admin' 
+                    ? 'bg-purple-900/30 border-purple-500/50 text-purple-300' 
+                    : user.role?.name === 'leader'
+                    ? 'bg-blue-900/30 border-blue-500/50 text-blue-300'
+                    : user.role?.name === 'dev'
+                    ? 'bg-green-900/30 border-green-500/50 text-green-300'
+                    : 'bg-slate-800/80 border-slate-700 text-slate-400'
+                }`}>
+                  <span>{user.role?.name === 'admin' ? '👑' : user.role?.name === 'leader' ? '⭐' : user.role?.name === 'dev' ? '💻' : '🧪'}</span>
+                  <span className="font-medium uppercase">{user.role?.name || 'User'}</span>
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
              <button id="tour-glossary" onClick={() => setShowGlossaryModal(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm transition-colors text-blue-300 min-w-[100px] justify-center">
