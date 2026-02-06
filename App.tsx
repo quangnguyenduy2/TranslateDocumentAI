@@ -42,7 +42,7 @@ import { AuthModal } from './components/AuthModal';
 import { GoogleCallback } from './components/GoogleCallback';
 import { LoginPage } from './components/LoginPage';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
-import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData } from './services/fileProcessing';
+import { processMarkdown, processExcel, processExcelWithShapes, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData, hasShapes } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB } from './services/storage';
 import apiClient, { authAPI, userDataAPI } from './services/apiClient';
 
@@ -619,9 +619,41 @@ const App: React.FC = () => {
         } else if (item.type === FileType.PPTX) {
           resultBlob = await processPptx(item.file, targetLang, context, glossary, updateProgress);
         } else {
-          // Pass blacklist only if enabled
+          // Smart detection: Check if file has shapes/flowcharts
+          const arrayBuffer = await item.file.arrayBuffer();
+          const fileHasShapes = await hasShapes(arrayBuffer);
+          
           const activeBlacklist = blacklistEnabled ? blacklist : [];
-          resultBlob = await processExcel(await item.file.arrayBuffer(), targetLang, item.selectedSheets, context, glossary, updateProgress, skipAlreadyTranslated, sourceLang, activeBlacklist);
+          
+          if (fileHasShapes) {
+            // Use xlsx-populate + JSZip processor (slower but handles shapes)
+            updateProgress('Detected shapes/flowcharts - using advanced processor...', 5);
+            resultBlob = await processExcelWithShapes(
+              arrayBuffer, 
+              targetLang, 
+              item.selectedSheets, 
+              context, 
+              glossary, 
+              updateProgress, 
+              skipAlreadyTranslated, 
+              sourceLang, 
+              activeBlacklist
+            );
+          } else {
+            // Use fast ExcelJS processor (no shapes)
+            updateProgress('No shapes detected - using fast processor...', 5);
+            resultBlob = await processExcel(
+              arrayBuffer, 
+              targetLang, 
+              item.selectedSheets, 
+              context, 
+              glossary, 
+              updateProgress, 
+              skipAlreadyTranslated, 
+              sourceLang, 
+              activeBlacklist
+            );
+          }
         }
 
         const url = URL.createObjectURL(resultBlob);

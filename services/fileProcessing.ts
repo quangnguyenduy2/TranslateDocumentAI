@@ -3,8 +3,10 @@ import ExcelJS from 'exceljs';
 import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64, detectLanguage } from './geminiService';
 import { SupportedLanguage, GlossaryItem, BlacklistItem } from '../types';
 import { processPptx } from './pptxProcessor';
+import { processExcelWithShapes } from './xlsxPopulateProcessor';
+import { hasShapes } from './excelShapeExtractor';
 
-export { processPptx };
+export { processPptx, processExcelWithShapes, hasShapes };
 
 // --- HELPERS ---
 
