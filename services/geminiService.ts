@@ -4,15 +4,29 @@ import { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
 import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector';
 
 /**
- * Get API key with priority: User's key (LocalStorage) → Default env key
+ * Get API key from user's localStorage (saved from backend after login)
+ * No fallback to env - user MUST set their own key
  */
 const getApiKey = (): string => {
   const userKey = localStorage.getItem('user_api_key');
-  return userKey || process.env.API_KEY || '';
+  if (!userKey) {
+    throw new Error('No API key configured. Please set your Gemini API key in settings.');
+  }
+  return userKey;
 };
 
-// Initialize AI with dynamic API key
-let ai = new GoogleGenAI({ apiKey: getApiKey() });
+// Initialize AI with dynamic API key - lazy initialization
+let ai: GoogleGenAI | null = null;
+
+/**
+ * Get or initialize AI client
+ */
+const getAI = (): GoogleGenAI => {
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey: getApiKey() });
+  }
+  return ai;
+};
 
 /**
  * Reinitialize AI client with new API key
@@ -238,7 +252,7 @@ export const translateImageContent = async (
   context: string = ''
 ): Promise<string | null> => {
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_IMAGE,
       contents: {
         parts: [
@@ -276,7 +290,7 @@ export const translateImageContent = async (
 export const extractTextFromBase64 = async (base64Data: string, mimeType: string = 'image/png'): Promise<string> => {
   const prompt = `OCR expert: Extract ALL text as Markdown. Preserve layout. Do not translate.`;
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_FAST,
       contents: { parts: [{ inlineData: { mimeType, data: base64Data } }, { text: prompt }] }
     });
@@ -312,7 +326,14 @@ export const translateText = async (
   if (!text.trim()) return '';
   
   // STEP 1: Mask sensitive data BEFORE any processing
+  console.log('🔒 SINGLE TEXT PROTECTION - Blacklist terms:', blacklist.length);
   const { maskedText, protectionMap } = maskText(text, blacklist);
+  
+  const protectedCount = Object.keys(protectionMap).length;
+  if (protectedCount > 0) {
+    console.log('🔒 Masked items:', protectedCount);
+    console.log('🔒 PROOF: Blacklist terms replaced with placeholders before AI call');
+  }
   
   // STEP 2: Detect source language (or use override if provided)
   const sourceLang = sourceLangOverride && sourceLangOverride !== 'auto' 
@@ -337,7 +358,7 @@ export const translateText = async (
     ? `${instruction}\n\nTranslate this (keep __P0__, __P1__, __PROTECTED_0__, __PROTECTED_1__, etc. as-is):\n${cleanedText}`
     : `${instruction}\n\nTranslate this:\n${cleanedText}`;
   
-  const response = await ai.models.generateContent({ model: MODEL_FAST, contents: prompt });
+  const response = await getAI().models.generateContent({ model: MODEL_FAST, contents: prompt });
   
   // Check if response contains API error
   if ((response as any).error) {
@@ -366,7 +387,20 @@ export const translateBatchStrings = async (
   if (texts.length === 0) return [];
   
   // STEP 1: Mask all texts with shared protection map
+  console.log('🔒 BLACKLIST PROTECTION - Number of blacklist terms:', blacklist.length);
+  if (blacklist.length > 0) {
+    console.log('🔒 Blacklist terms:', blacklist.map(b => b.term));
+  }
+  
   const { maskedTexts, protectionMap: globalProtectionMap } = maskBatchTexts(texts, blacklist);
+  
+  const protectedCount = Object.keys(globalProtectionMap).length;
+  console.log('🔒 PROTECTION APPLIED - Sensitive items masked:', protectedCount);
+  if (protectedCount > 0) {
+    console.log('🔒 Protection map keys:', Object.keys(globalProtectionMap));
+    console.log('🔒 PROOF: Original blacklist terms replaced with placeholders');
+    console.log('🔒 Example mapping:', Object.entries(globalProtectionMap).slice(0, 3));
+  }
   
   // STEP 2: Detect source language from first non-empty text (or use override if provided)
   const firstText = maskedTexts.find(t => t.trim().length > 0) || '';
@@ -385,11 +419,25 @@ export const translateBatchStrings = async (
     ? `${instruction}\n\nTranslate this JSON array. Keep __P0__, __P1__, __PROTECTED_0__, __PROTECTED_1__ placeholders as-is. Maintain order.`
     : `${instruction}\n\nTranslate this JSON array of strings. Maintain order.`;
   
+  console.log('🚀 Number of texts to translate:', cleanedTexts.length);
+  console.log('🚀 Protected placeholders in text:', protectedCount);
+  if (protectedCount > 0) {
+    console.log('🚀 PROOF: Only placeholders like __PROTECTED_0__ sent to AI, NOT original blacklist terms');
+    console.log('🚀 ===== TEXT SENT TO AI (first 3 samples) =====');
+    cleanedTexts.slice(0, 3).forEach((text, i) => {
+      console.log(`   [${i}] ${text}`);
+    });
+    console.log('🚀 ===== PROTECTED VALUES MAPPING =====');
+    Object.entries(globalProtectionMap).slice(0, 5).forEach(([key, value]) => {
+      console.log(`   ${key} = "${value}"`);
+    });
+  }
+  
   // Retry with exponential backoff (3 attempts with longer delays)
   let lastError: any;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await ai.models.generateContent({
+      const response = await getAI().models.generateContent({
         model: MODEL_FAST,
         contents: { parts: [{ text: prompt }, { text: JSON.stringify(cleanedTexts) }] },
         config: {
@@ -415,6 +463,8 @@ export const translateBatchStrings = async (
       
       const translations = JSON.parse(response.text || '{}').translations;
       if (translations && Array.isArray(translations) && translations.length === texts.length) {
+        console.log('📥 ===== translations FROM AI  =====',translations);
+        
         // STEP 4: Restore language-specific placeholders for all translations
         const restoredTranslations = translations.map((translated, index) =>
           extractedData[index].placeholders.length > 0
@@ -423,7 +473,14 @@ export const translateBatchStrings = async (
         );
         
         // STEP 5: Unmask sensitive data
-        return unmaskBatchTexts(restoredTranslations, globalProtectionMap);
+        const finalResult = unmaskBatchTexts(restoredTranslations, globalProtectionMap);
+        console.log('✅finalResult after restoring placeholders:', finalResult);
+        
+        console.log('✅finalResult after unmasking:', finalResult);
+        console.log('💰 Estimated tokens saved:', protectedCount * 2, 'tokens');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        return finalResult;
       }
     } catch (error) {
       lastError = error;

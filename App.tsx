@@ -37,20 +37,35 @@ import {
   IconKey
 } from './components/Icons';
 import { TestDashboard } from './components/TestDashboard';
+import { AdminPage } from './components/AdminPage';
+import { AuthModal } from './components/AuthModal';
+import { GoogleCallback } from './components/GoogleCallback';
+import { LoginPage } from './components/LoginPage';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
 import { processMarkdown, processExcel, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData } from './services/fileProcessing';
-import { saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, clearGlossaryDB, saveBlacklistToDB, getBlacklistFromDB, clearBlacklistDB } from './services/storage';
+import { saveFileToDB, getFileFromDB } from './services/storage';
+import { authAPI, userDataAPI } from './services/apiClient';
 
 const APP_VERSION = "1.3.0";
 const APP_AUTHOR = "NDQuang2 ";
 
 const App: React.FC = () => {
+  // Handle Google OAuth callback route
+  if (window.location.pathname === '/auth/callback') {
+    return <GoogleCallback />;
+  }
+
   const [globalStatus, setGlobalStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [queue, setQueue] = useState<FileQueueItem[]>([]);
   const [sourceLang, setSourceLang] = useState<string>('auto'); // 'auto' or language code (vi, ja, en, ko, zh)
   const [targetLang, setTargetLang] = useState<SupportedLanguage>(SupportedLanguage.VIETNAMESE);
   const [skipAlreadyTranslated, setSkipAlreadyTranslated] = useState<boolean>(true); // Smart mode: skip cells already in target language
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  
+  // Auth State
+  const [user, setUser] = useState<any>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(true);
   
   // New State Features
   const [glossary, setGlossary] = useState<GlossaryItem[]>([]);
@@ -61,7 +76,7 @@ const App: React.FC = () => {
   const [blacklist, setBlacklist] = useState<BlacklistItem[]>([]);
   const [blacklistEnabled, setBlacklistEnabled] = useState<boolean>(true);
   
-  // API Key Management
+  // API Key Management (deprecated - now using backend auth)
   const [userApiKey, setUserApiKey] = useState<string>('');
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   
@@ -71,11 +86,12 @@ const App: React.FC = () => {
   const [showContextModal, setShowContextModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showTestDashboard, setShowTestDashboard] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Driver.js Tour Logic
+  
+  // Driver.js Tour Logic - MUST be before conditional returns to follow Rules of Hooks
   const startTour = useCallback(() => {
     const driverObj = driver({
       showProgress: true,
@@ -145,60 +161,96 @@ const App: React.FC = () => {
     driverObj.drive();
   }, []);
 
-  // Load History & Glossary from Storage (IndexedDB)
+  // Check authentication on mount
   useEffect(() => {
-    const loadData = async () => {
-      // 0. Load User API Key from LocalStorage
-      const savedApiKey = localStorage.getItem('user_api_key');
-      if (savedApiKey) {
-        setUserApiKey(savedApiKey);
-      }
-
-      // 1. Load Glossary from IDB
-      try {
-        const storedGlossary = await getGlossaryFromDB();
-        setGlossary(storedGlossary);
-      } catch (e) {
-        console.error("Failed to load glossary from DB", e);
-      }
-
-      // 2. Load Blacklist from IDB
-      try {
-        const storedBlacklist = await getBlacklistFromDB();
-        setBlacklist(storedBlacklist);
-      } catch (e) {
-        console.error("Failed to load blacklist from DB", e);
-      }
-
-      // 2. Load History from LocalStorage + IDB
-      const savedHistory = localStorage.getItem('d12_history');
-      if (savedHistory) {
-        try { 
-          const parsed: HistoryItem[] = JSON.parse(savedHistory);
-          const now = Date.now();
-          // Filter out items older than 24h
-          const validHistory = parsed.filter((h) => (now - h.timestamp) < 24 * 60 * 60 * 1000);
+    const checkAuth = async () => {
+      const token = localStorage.getItem('accessToken');
+      if (token) {
+        try {
+          const response = await authAPI.getMe();
+          setUser(response.data);
           
-          // Rehydrate blobs from IndexedDB
-          const rehydratedHistory = await Promise.all(validHistory.map(async (item) => {
-            const blob = await getFileFromDB(item.id);
-            if (blob) {
-              return {
-                ...item,
-                blob,
-                downloadUrl: URL.createObjectURL(blob)
-              };
+          // Fetch user's API key from backend
+          try {
+            const apiKeyResponse = await authAPI.getApiKey();
+            if (apiKeyResponse.data.apiKey) {
+              localStorage.setItem('user_api_key', apiKeyResponse.data.apiKey);
+              setUserApiKey(apiKeyResponse.data.apiKey);
+            } else {
+              // No API key set, show warning
+              setShowApiKeyModal(true);
             }
-            return item;
-          }));
-
-          setHistory(rehydratedHistory);
-        } catch(e) {
-          console.error("Failed to load history", e);
+          } catch (error) {
+            console.error('Failed to fetch API key:', error);
+            setShowApiKeyModal(true);
+          }
+        } catch (error) {
+          // Token expired or invalid, clear it
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('user_api_key');
+          setUser(null);
         }
       }
+      setIsAuthenticating(false);
+    };
+    checkAuth();
+  }, []);
 
-      // 3. Check Tour Status - Auto start for first-time users
+  // Load History & Glossary from Backend
+  useEffect(() => {
+    const loadData = async () => {
+      if (!user) return;
+
+      try {
+        // 1. Load Glossary from backend
+        const glossaryResponse = await userDataAPI.getGlossary();
+        setGlossary(glossaryResponse.data.map((item: any) => ({
+          id: item.id,
+          term: item.term,
+          translation: item.translation,
+        })));
+      } catch (e) {
+        console.error("Failed to load glossary from backend", e);
+      }
+
+      try {
+        // 2. Load Blacklist from backend
+        const blacklistResponse = await userDataAPI.getBlacklist();
+        setBlacklist(blacklistResponse.data.map((item: any) => ({
+          id: item.id,
+          term: item.term,
+          caseSensitive: item.caseSensitive,
+          enabled: item.enabled,
+        })));
+      } catch (e) {
+        console.error("Failed to load blacklist from backend", e);
+      }
+
+      try {
+        // 3. Load Preferences (context, blacklistEnabled)
+        const prefResponse = await userDataAPI.getPreferences();
+        setContext(prefResponse.data.context || '');
+        setBlacklistEnabled(prefResponse.data.blacklistEnabled ?? true);
+      } catch (e) {
+        console.error("Failed to load preferences from backend", e);
+      }
+
+      try {
+        // 4. Load History from backend
+        const historyResponse = await userDataAPI.getHistory();
+        const historyItems = historyResponse.data.map((item: any) => ({
+          id: item.id,
+          fileName: item.fileName,
+          fileType: item.fileType,
+          targetLang: item.targetLang,
+          timestamp: item.timestamp,
+        }));
+        setHistory(historyItems);
+      } catch (e) {
+        console.error("Failed to load history from backend", e);
+      }
+
+      // 5. Check Tour Status - Auto start for first-time users
       const hasSeenTour = localStorage.getItem('d12_tour_seen');
       if (!hasSeenTour) {
         setTimeout(() => startTour(), 1500);
@@ -216,30 +268,96 @@ const App: React.FC = () => {
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [startTour]);
+  }, [user, startTour]);
+
+  // Effect to load Excel sheets
+  useEffect(() => {
+    const loadSheets = async () => {
+      const unprocessedExcels = queue.filter(
+        item => item.type === FileType.EXCEL && item.availableSheets.length === 0 && item.status === AppStatus.IDLE
+      );
+      if (unprocessedExcels.length === 0) return;
+
+      for (const item of unprocessedExcels) {
+        try {
+          const names = await getExcelSheetNames(item.file);
+          setQueue(prev => prev.map(q => {
+            if (q.id === item.id) {
+              // Don't pre-select any sheets, let user choose
+              return { ...q, availableSheets: names, selectedSheets: [], isExpanded: false };
+            }
+            return q;
+          }));
+          addLog(`Loaded ${names.length} sheets for ${item.file.name}`, 'info');
+        } catch (e) {
+          console.error(e);
+          addLog(`Failed to load sheets for ${item.file.name}`, 'error');
+        }
+      }
+    };
+    loadSheets();
+  }, [queue]);
+
+  // Add log helper - must be before conditional returns
+  const addLog = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setLogs(prev => [...prev, { id: Math.random().toString(36), message, timestamp: new Date(), type }]);
+  }, []);
+
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await authAPI.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('user_api_key');
+    setUser(null);
+    setUserApiKey('');
+  };
+
+  // Show loading screen while authenticating
+  if (isAuthenticating) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-white text-xl flex items-center gap-3">
+          <IconLoading className="w-6 h-6 animate-spin" />
+          Loading...
+        </div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!user) {
+    return <LoginPage onLoginSuccess={(userData) => setUser(userData)} />;
+  }
 
   const handleSaveGlossary = async (newGlossary: GlossaryItem[]) => {
     setGlossary(newGlossary);
-    await saveGlossaryToDB(newGlossary); // Persist to IDB
+    try {
+      await userDataAPI.saveGlossary(newGlossary.map(item => ({
+        term: item.term,
+        translation: item.translation,
+      })));
+    } catch (e) {
+      console.error("Failed to save glossary to backend", e);
+    }
   };
 
   const updateHistory = async (newItem: HistoryItem) => {
-    // 1. Save Blob to IDB
-    if (newItem.blob) {
-      await saveFileToDB(newItem.id, newItem.blob);
+    try {
+      await userDataAPI.addHistoryItem({
+        fileName: newItem.fileName,
+        fileType: newItem.fileType,
+        targetLang: newItem.targetLang,
+        timestamp: newItem.timestamp,
+      });
+      
+      setHistory(prev => [newItem, ...prev]);
+    } catch (e) {
+      console.error("Failed to save history item to backend", e);
     }
-
-    setHistory(prev => {
-      const updated = [newItem, ...prev];
-      // 2. Save Metadata to LocalStorage (exclude blob/url to save space)
-      const metaDataOnly = updated.map(({ blob, downloadUrl, ...rest }) => rest);
-      localStorage.setItem('d12_history', JSON.stringify(metaDataOnly));
-      return updated;
-    });
-  };
-
-  const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
-    setLogs(prev => [...prev, { id: Math.random().toString(36), message, timestamp: new Date(), type }]);
   };
 
   // Helper function to get detailed error message
@@ -383,34 +501,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Effect to load Excel sheets
-  useEffect(() => {
-    const loadSheets = async () => {
-      const unprocessedExcels = queue.filter(
-        item => item.type === FileType.EXCEL && item.availableSheets.length === 0 && item.status === AppStatus.IDLE
-      );
-      if (unprocessedExcels.length === 0) return;
-
-      for (const item of unprocessedExcels) {
-        try {
-          const names = await getExcelSheetNames(item.file);
-          setQueue(prev => prev.map(q => {
-            if (q.id === item.id) {
-              // Don't pre-select any sheets, let user choose
-              return { ...q, availableSheets: names, selectedSheets: [], isExpanded: false };
-            }
-            return q;
-          }));
-          addLog(`Loaded ${names.length} sheets for ${item.file.name}`, 'info');
-        } catch (e) {
-          console.error(e);
-          addLog(`Failed to load sheets for ${item.file.name}`, 'error');
-        }
-      }
-    };
-    loadSheets();
-  }, [queue]);
-
   const removeFile = (id: string) => {
     setQueue(prev => {
       const newQueue = prev.filter(item => item.id !== id);
@@ -479,6 +569,14 @@ const App: React.FC = () => {
   const processQueue = async () => {
     const itemsToProcess = queue.filter(item => item.status === AppStatus.IDLE || item.status === AppStatus.ERROR);
     if (itemsToProcess.length === 0) return;
+
+    // Check if user has API key set
+    const apiKey = localStorage.getItem('user_api_key');
+    if (!apiKey) {
+      addLog('⚠️ No API key configured! Please set your Gemini API key in settings.', 'error');
+      setShowApiKeyModal(true);
+      return;
+    }
 
     // Check if any Excel file has more than 5 sheets selected
     for (const item of itemsToProcess) {
@@ -867,6 +965,16 @@ const App: React.FC = () => {
 
   const ContextModal = () => {
     if (!showContextModal) return null;
+    
+    const handleSaveContext = async () => {
+      try {
+        await userDataAPI.updatePreferences({ context });
+        setShowContextModal(false);
+      } catch (e) {
+        console.error('Failed to save context', e);
+      }
+    };
+    
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
         <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-lg shadow-2xl">
@@ -884,7 +992,7 @@ const App: React.FC = () => {
             />
           </div>
           <div className="p-4 border-t border-slate-700 text-right">
-             <button onClick={() => setShowContextModal(false)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm text-white">Save Context</button>
+             <button onClick={handleSaveContext} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm text-white">Save Context</button>
           </div>
         </div>
       </div>
@@ -934,19 +1042,33 @@ const App: React.FC = () => {
 
   const ApiKeyModal = () => {
     const [inputKey, setInputKey] = useState(userApiKey || '');
+    const [saving, setSaving] = useState(false);
     
-    const handleSaveApiKey = (key: string) => {
+    const handleSaveApiKey = async (key: string) => {
       const trimmedKey = key.trim();
-      if (trimmedKey) {
-        localStorage.setItem('user_api_key', trimmedKey);
-        setUserApiKey(trimmedKey);
-        addLog('API key saved successfully! Reloading...', 'success');
-      } else {
-        localStorage.removeItem('user_api_key');
-        setUserApiKey('');
-        addLog('API key removed! Using default key. Reloading...', 'success');
+      setSaving(true);
+      
+      try {
+        if (trimmedKey) {
+          // Save to backend
+          await authAPI.updateApiKey(trimmedKey);
+          localStorage.setItem('user_api_key', trimmedKey);
+          setUserApiKey(trimmedKey);
+          addLog('API key saved successfully!', 'success');
+        } else {
+          // Clear from backend
+          await authAPI.updateApiKey('');
+          localStorage.removeItem('user_api_key');
+          setUserApiKey('');
+          addLog('API key removed! Backend will not use any key.', 'success');
+        }
+        setShowApiKeyModal(false);
+      } catch (error) {
+        addLog('Failed to save API key to backend', 'error');
+        console.error('API key save error:', error);
+      } finally {
+        setSaving(false);
       }
-      setTimeout(() => window.location.reload(), 1000);
     };
 
     if (!showApiKeyModal) return null;
@@ -1034,24 +1156,26 @@ const App: React.FC = () => {
               <button
                 onClick={() => setShowApiKeyModal(false)}
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm text-white transition-colors"
+                disabled={saving}
               >
                 Cancel
               </button>
               {userApiKey && (
                 <button
                   onClick={() => handleSaveApiKey('')}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded text-sm text-white transition-colors flex items-center gap-2"
+                  className="px-4 py-2 bg-red-600/80 hover:bg-red-600 rounded text-sm text-white transition-colors disabled:opacity-50"
+                  disabled={saving}
                 >
-                  <IconTrash className="w-3 h-3" />
-                  Remove Key
+                  {saving ? 'Removing...' : 'Remove Key'}
                 </button>
               )}
               <button
                 onClick={() => handleSaveApiKey(inputKey)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white transition-colors flex items-center gap-2 disabled:opacity-50"
+                disabled={saving}
               >
-                <IconSave className="w-3 h-3" />
-                Save & Reload
+                {saving && <IconLoading className="w-4 h-4 animate-spin" />}
+                {saving ? 'Saving...' : 'Save Key'}
               </button>
             </div>
           </div>
@@ -1077,50 +1201,90 @@ const App: React.FC = () => {
     const handleSaveTerm = async () => {
       if (!term.trim()) return;
       
+      let updatedBlacklist = blacklist;
+      
       if (editingId) {
-        setBlacklist(prev => prev.map(b => b.id === editingId ? { ...b, term: term.trim(), caseSensitive } : b));
+        updatedBlacklist = blacklist.map(b => b.id === editingId ? { ...b, term: term.trim(), caseSensitive } : b);
+        setBlacklist(updatedBlacklist);
         setEditingId(null);
       } else {
         const newItem: BlacklistItem = {
           id: Math.random().toString(36).substr(2, 9),
           term: term.trim(),
           caseSensitive,
-          enabled: true
+          enabled: true,
+          isDefault: false // Mark as user's personal item
         };
-        setBlacklist(prev => [...prev, newItem]);
+        updatedBlacklist = [...blacklist, newItem];
+        setBlacklist(updatedBlacklist);
       }
       
       setTerm('');
       setCaseSensitive(false);
       
       try {
-        await saveBlacklistToDB(editingId ? blacklist.map(b => b.id === editingId ? { ...b, term: term.trim(), caseSensitive } : b) : [...blacklist, { id: Math.random().toString(36).substr(2, 9), term: term.trim(), caseSensitive, enabled: true }]);
+        // Only save user's personal blacklist (filter out default items)
+        const userBlacklist = updatedBlacklist.filter(b => !b.isDefault);
+        await userDataAPI.saveBlacklist(userBlacklist.map(b => ({
+          term: b.term,
+          caseSensitive: b.caseSensitive,
+          enabled: b.enabled,
+        })));
       } catch (e) {
         console.error('Failed to save blacklist', e);
       }
     };
 
     const removeTerm = async (id: string) => {
+      const item = blacklist.find(b => b.id === id);
+      if (item?.isDefault) {
+        alert('⚠️ Cannot delete admin blacklist terms (managed by admin only)');
+        return;
+      }
+      
       const updated = blacklist.filter(b => b.id !== id);
       setBlacklist(updated);
       try {
-        await saveBlacklistToDB(updated);
+        // Only save user's personal blacklist (filter out default items)
+        const userBlacklist = updated.filter(b => !b.isDefault);
+        await userDataAPI.saveBlacklist(userBlacklist.map(b => ({
+          term: b.term,
+          caseSensitive: b.caseSensitive,
+          enabled: b.enabled,
+        })));
       } catch (e) {
         console.error('Failed to update blacklist', e);
       }
     };
 
     const toggleEnabled = async (id: string) => {
+      // Find the item to check if it's a default (admin) item
+      const item = blacklist.find(b => b.id === id);
+      if (item?.isDefault) {
+        alert('⚠️ Cannot disable admin blacklist terms (company security policy)');
+        return;
+      }
+      
       const updated = blacklist.map(b => b.id === id ? { ...b, enabled: !b.enabled } : b);
       setBlacklist(updated);
       try {
-        await saveBlacklistToDB(updated);
+        // Only save user's personal blacklist (filter out default items)
+        const userBlacklist = updated.filter(b => !b.isDefault);
+        await userDataAPI.saveBlacklist(userBlacklist.map(b => ({
+          term: b.term,
+          caseSensitive: b.caseSensitive,
+          enabled: b.enabled,
+        })));
       } catch (e) {
         console.error('Failed to update blacklist', e);
       }
     };
 
     const startEdit = (item: BlacklistItem) => {
+      if (item.isDefault) {
+        alert('⚠️ Cannot edit admin blacklist terms (managed by admin only)');
+        return;
+      }
       setEditingId(item.id);
       setTerm(item.term);
       setCaseSensitive(item.caseSensitive || false);
@@ -1133,10 +1297,20 @@ const App: React.FC = () => {
     };
 
     const clearBlacklistData = async () => {
-      if (!confirm('Delete all protected terms? This cannot be undone.')) return;
-      setBlacklist([]);
+      const userTermsCount = blacklist.filter(b => !b.isDefault).length;
+      if (userTermsCount === 0) {
+        alert('No personal terms to delete (admin terms cannot be deleted)');
+        return;
+      }
+      
+      if (!confirm(`Delete all ${userTermsCount} of YOUR protected terms? Admin terms will remain. This cannot be undone.`)) return;
+      
+      // Keep only admin terms
+      const adminTerms = blacklist.filter(b => b.isDefault);
+      setBlacklist(adminTerms);
+      
       try {
-        await clearBlacklistDB();
+        await clearBlacklistDB(); // Clear user's blacklist from DB
       } catch (e) {
         console.error('Failed to clear blacklist', e);
       }
@@ -1168,8 +1342,18 @@ const App: React.FC = () => {
       setImportLoading(true);
       try {
         const items = await parseBlacklistFromExcel(importFile, termColIndex);
-        setBlacklist(prev => [...prev, ...items]);
-        await saveBlacklistToDB([...blacklist, ...items]);
+        // Mark imported items as user's personal items
+        const userItems = items.map(item => ({ ...item, isDefault: false }));
+        const updatedBlacklist = [...blacklist, ...userItems];
+        setBlacklist(updatedBlacklist);
+        
+        // Only save user's personal blacklist (filter out default items)
+        const userBlacklist = updatedBlacklist.filter(b => !b.isDefault);
+        await userDataAPI.saveBlacklist(userBlacklist.map(b => ({
+          term: b.term,
+          caseSensitive: b.caseSensitive,
+          enabled: b.enabled,
+        })));
         alert(`Imported ${items.length} protected terms!`);
         setImportStep('upload');
         setImportFile(null);
@@ -1255,36 +1439,47 @@ const App: React.FC = () => {
                   filteredBlacklist.length === 0 ? 
                   <p className="text-slate-500 text-sm italic text-center mt-8">No matches.</p> :
                   filteredBlacklist.map(b => (
-                    <div key={b.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingId === b.id ? 'border border-orange-500/50 bg-orange-900/10' : 'bg-slate-700/50'}`}>
+                    <div key={b.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingId === b.id ? 'border border-orange-500/50 bg-orange-900/10' : b.isDefault ? 'bg-blue-900/20 border border-blue-700/30' : 'bg-slate-700/50'}`}>
                       <div className="flex items-center gap-2 flex-1">
                         <input 
                           type="checkbox" 
                           checked={b.enabled !== false} 
                           onChange={() => toggleEnabled(b.id)}
-                          className="w-4 h-4 rounded"
+                          disabled={b.isDefault}
+                          className={`w-4 h-4 rounded ${b.isDefault ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                          title={b.isDefault ? 'Admin term - cannot be disabled' : 'Toggle protection'}
                         />
                         <span className={`text-red-300 font-medium ${b.enabled === false ? 'line-through opacity-50' : ''}`}>
                           {b.term}
                         </span>
                         {b.caseSensitive && <span className="text-[10px] bg-slate-600 px-1 py-0.5 rounded text-slate-300">Aa</span>}
+                        {b.isDefault && <span className="text-[10px] bg-blue-600 px-1.5 py-0.5 rounded text-white font-medium">🔒 Admin</span>}
                       </div>
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => startEdit(b)} className="text-slate-400 hover:text-orange-400 p-1">
-                          <IconEdit className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => removeTerm(b.id)} className="text-slate-400 hover:text-red-400 p-1">
-                          <IconTrash className="w-3.5 h-3.5" />
-                        </button>
+                        {!b.isDefault && (
+                          <>
+                            <button onClick={() => startEdit(b)} className="text-slate-400 hover:text-orange-400 p-1">
+                              <IconEdit className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => removeTerm(b.id)} className="text-slate-400 hover:text-red-400 p-1">
+                              <IconTrash className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))
                 }
               </div>
               <div className="flex justify-between items-center text-[10px] text-slate-500">
-                <span>Total: {blacklist.length} terms ({blacklist.filter(b => b.enabled !== false).length} active)</span>
-                {blacklist.length > 0 && (
+                <span>
+                  Total: {blacklist.length} terms 
+                  ({blacklist.filter(b => b.isDefault).length} admin + {blacklist.filter(b => !b.isDefault).length} yours)
+                  • {blacklist.filter(b => b.enabled !== false).length} active
+                </span>
+                {blacklist.filter(b => !b.isDefault).length > 0 && (
                   <button onClick={clearBlacklistData} className="text-red-400 hover:underline">
-                    Delete All
+                    Delete Your Terms
                   </button>
                 )}
               </div>
@@ -1745,6 +1940,14 @@ const App: React.FC = () => {
       <PreviewModal />
       <ApiKeyModal />
       {showTestDashboard && <TestDashboard onClose={() => setShowTestDashboard(false)} />}
+      
+      {/* Admin Panel - Only accessible by admin users */}
+      {showAdminPanel && user?.role?.name === 'admin' && (
+        <AdminPage 
+          apiClient={import('./services/apiClient').then(m => m.default)} 
+          onClose={() => setShowAdminPanel(false)} 
+        />
+      )}
 
       <div className="max-w-4xl mx-auto space-y-8 flex-1 w-full">
         
@@ -1782,6 +1985,16 @@ const App: React.FC = () => {
                <IconKey className="w-4 h-4" /> 
                <span>Key</span>
              </button>
+             {user && (
+               <button 
+                 onClick={handleLogout} 
+                 className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/40 border border-red-500/50 rounded-lg text-sm transition-colors text-red-300 min-w-[100px] justify-center"
+                 title={`Logged in as ${user.email}`}
+               >
+                 <IconKey className="w-4 h-4" /> 
+                 <span>Logout</span>
+               </button>
+             )}
              <button onClick={startTour} className="flex items-center justify-center p-2 w-10 h-10 bg-slate-800 rounded-lg text-slate-500 hover:text-blue-400 transition-colors" title="Start Tour">
                 <IconHelp className="w-5 h-5" />
              </button>
@@ -1852,7 +2065,15 @@ const App: React.FC = () => {
                 <input 
                   type="checkbox"
                   checked={blacklistEnabled}
-                  onChange={(e) => setBlacklistEnabled(e.target.checked)}
+                  onChange={async (e) => {
+                    const newValue = e.target.checked;
+                    setBlacklistEnabled(newValue);
+                    try {
+                      await userDataAPI.updatePreferences({ blacklistEnabled: newValue });
+                    } catch (error) {
+                      console.error('Failed to save blacklist enabled state', error);
+                    }
+                  }}
                   className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-red-600 focus:ring-2 focus:ring-red-500 cursor-pointer"
                   disabled={globalStatus === AppStatus.TRANSLATING}
                 />
@@ -2034,14 +2255,29 @@ const App: React.FC = () => {
       {/* Footer */}
       <footer className="w-full max-w-4xl mx-auto mt-8 py-4 border-t border-slate-800 text-center text-slate-600 text-xs">
          <div className="flex flex-col items-center gap-3">
-            <button 
-              onClick={() => setShowTestDashboard(true)}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-blue-400 transition-all flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-700 hover:border-blue-500"
-              title="Open System Health Dashboard (Ctrl+Shift+T)"
-            >
-              <IconSettings className="w-4 h-4" />
-              <span className="font-medium">System Health</span>
-            </button>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setShowTestDashboard(true)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-blue-400 transition-all flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-700 hover:border-blue-500"
+                title="Open System Health Dashboard (Ctrl+Shift+T)"
+              >
+                <IconSettings className="w-4 h-4" />
+                <span className="font-medium">System Health</span>
+              </button>
+              
+              {/* Admin Panel Button */}
+              {user?.role?.name === 'admin' && (
+                <button 
+                  onClick={() => setShowAdminPanel(true)}
+                  className="bg-purple-900/30 hover:bg-purple-800/40 text-purple-300 hover:text-purple-200 transition-all flex items-center gap-2 px-4 py-2 rounded-lg border border-purple-700 hover:border-purple-500"
+                  title="Open Admin Panel - Manage Default Glossary & Blacklist"
+                >
+                  <IconShield className="w-4 h-4" />
+                  <span className="font-medium">Admin Panel</span>
+                </button>
+              )}
+            </div>
+            
             <div className="flex items-center gap-4">
               <span>DocuTranslate AI v{APP_VERSION}</span>
               <span>•</span>
@@ -2049,6 +2285,17 @@ const App: React.FC = () => {
             </div>
          </div>
       </footer>
+      
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onLoginSuccess={(userData) => {
+            setUser(userData);
+            setShowAuthModal(false);
+          }}
+        />
+      )}
     </div>
   );
 };

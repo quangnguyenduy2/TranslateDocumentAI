@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.38.0",
+    "axios": "^1.13.4",
     "buffer": "6.0.3",
     "docx-preview": "^0.3.7",
     "driver.js": "^1.4.0",
