@@ -26,6 +26,7 @@ export interface BlacklistItem {
   term: string;
   caseSensitive?: boolean;
   enabled?: boolean;
+  isDefault?: boolean; // True if this is an admin-managed default term
 }
 
 export interface HistoryItem {

@@ -44,7 +44,7 @@ import { GoogleCallback } from './components/GoogleCallback';
 import { LoginPage } from './components/LoginPage';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
 import { processMarkdown, processExcel, processExcelWithShapes, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData, hasShapes } from './services/fileProcessing';
-import { saveFileToDB, getFileFromDB } from './services/storage';
+import { saveFileToDB, getFileFromDB, clearGlossaryDB, clearBlacklistDB } from './services/storage';
 import apiClient, { authAPI, userDataAPI } from './services/apiClient';
 
 const APP_VERSION = "1.3.0";
@@ -290,8 +290,8 @@ const App: React.FC = () => {
           const names = await getExcelSheetNames(item.file);
           setQueue(prev => prev.map(q => {
             if (q.id === item.id) {
-              // Don't pre-select any sheets, let user choose
-              return { ...q, availableSheets: names, selectedSheets: [], isExpanded: false };
+              // Auto-expand sheet selector for Excel files
+              return { ...q, availableSheets: names, selectedSheets: [], isExpanded: true };
             }
             return q;
           }));
@@ -1142,17 +1142,29 @@ const App: React.FC = () => {
                 placeholder="AIza..."
                 className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-sm text-white outline-none focus:border-blue-500 transition-colors"
               />
-              <p className="text-xs text-slate-500 mt-2">
-                Leave empty to use default key. Get your free key at:{' '}
-                <a 
-                  href="https://aistudio.google.com/app/apikey" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-blue-400 hover:underline"
-                >
-                  Google AI Studio ↗
-                </a>
-              </p>
+              <div className="mt-3 p-3 bg-slate-800/50 border border-slate-600 rounded text-xs text-slate-300 space-y-2">
+                <div className="font-medium text-slate-200 mb-2">📖 How to get your free API key:</div>
+                <ol className="list-decimal list-inside space-y-1 ml-2">
+                  <li>
+                    Visit{' '}
+                    <a 
+                      href="https://aistudio.google.com/app/apikey" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:underline font-medium"
+                    >
+                      Google AI Studio ↗
+                    </a>
+                  </li>
+                  <li>Sign in with your Google account</li>
+                  <li>Click "Create API Key" button</li>
+                  <li>Copy the generated key (starts with "AIza...")</li>
+                  <li>Paste it into the field above</li>
+                </ol>
+                <div className="pt-2 border-t border-slate-600 text-slate-400">
+                  💡 Tip: Leave empty to use the default shared key
+                </div>
+              </div>
             </div>
             
             {userApiKey && (
