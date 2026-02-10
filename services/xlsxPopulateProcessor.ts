@@ -3,6 +3,19 @@ import { SupportedLanguage, GlossaryItem, BlacklistItem } from '../types';
 import { extractShapeTexts, replaceShapeTexts } from './excelShapeExtractor';
 
 /**
+ * Helper to convert ArrayBuffer to Base64 string
+ */
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+};
+
+/**
  * Process Excel file with full shape/drawing support using ZIP manipulation
  * This replaces the ExcelJS processor for better shape handling
  */
@@ -183,10 +196,76 @@ export const processExcelWithShapes = async (
   // 3. Handle embedded images (OCR translation)
   onProgress('Processing embedded images...', 85);
   
-  // Note: xlsx-populate doesn't have native image extraction API like ExcelJS
-  // For now, we skip image OCR in xlsx-populate processor
-  // Alternative: Use ExcelJS in parallel just for images, or extract from XML directly
-  console.warn('Image OCR not yet implemented in xlsx-populate processor');
+  try {
+    // Load file with ExcelJS in parallel just for image extraction
+    const ExcelJS = (await import('exceljs')).default;
+    const tempWorkbook = new ExcelJS.Workbook();
+    await tempWorkbook.xlsx.load(arrayBuffer);
+    
+    let totalImagesProcessed = 0;
+    
+    for (const sheetName of selectedSheets) {
+      const worksheet = tempWorkbook.getWorksheet(sheetName);
+      if (!worksheet) continue;
+
+      const images = worksheet.getImages();
+      if (!images || images.length === 0) continue;
+
+      console.log(`📷 Found ${images.length} images in sheet "${sheetName}"`);
+
+      for (const img of images) {
+        try {
+          // @ts-ignore
+          const mediaId = img.imageId;
+          // @ts-ignore
+          const media = tempWorkbook.model.media.find(m => m.index === mediaId);
+
+          if (media && media.buffer) {
+            const base64Data = arrayBufferToBase64(media.buffer);
+            const mimeType = media.extension === 'png' ? 'image/png' : 
+                            media.extension === 'jpeg' || media.extension === 'jpg' ? 'image/jpeg' : 'image/png';
+
+            totalImagesProcessed++;
+            onProgress(`Processing image ${totalImagesProcessed} (OCR)...`, 85 + Math.min(totalImagesProcessed, 5));
+
+            // OCR Extraction
+            const extractedText = await extractTextFromBase64(base64Data, mimeType);
+            
+            if (extractedText && !extractedText.includes("NO_TEXT_FOUND")) {
+              // Translation
+              const translatedImgText = await translateText(extractedText, targetLang, context, glossary);
+              
+              // Get target cell position
+              // @ts-ignore
+              const row = Math.floor(img.range.tl.nativeRow) + 1;
+              // @ts-ignore
+              const col = Math.floor(img.range.tl.nativeCol) + 1;
+              
+              // Apply to xlsx-populate workbook
+              const sheet = workbook.sheet(sheetName);
+              if (sheet) {
+                const cell = sheet.cell(row, col);
+                const existingText = cell.value() || '';
+                const newContent = `${existingText ? existingText + '\n\n' : ''}--- [IMAGE TRANSLATION] ---\n${translatedImgText}\n-------------------------`;
+                cell.value(newContent);
+                
+                console.log(`✅ Image text translated and placed at ${sheetName}!${cell.address()}`);
+              }
+            }
+          }
+        } catch (imgErr) {
+          console.error('Failed to process image:', imgErr);
+        }
+      }
+    }
+    
+    if (totalImagesProcessed > 0) {
+      console.log(`✅ Processed ${totalImagesProcessed} images with OCR`);
+    }
+  } catch (err) {
+    console.error('Image OCR failed:', err);
+    // Continue with shape translations even if images fail
+  }
 
   // 4. Translate sheet names
   if (selectedSheets.length > 0) {
