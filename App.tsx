@@ -37,6 +37,7 @@ import {
   IconKey
 } from './components/Icons';
 import { TestDashboard } from './components/TestDashboard';
+import { SystemHealthDashboard } from './components/SystemHealthDashboard';
 import { AdminPage } from './components/AdminPage';
 import { AuthModal } from './components/AuthModal';
 import { GoogleCallback } from './components/GoogleCallback';
@@ -86,6 +87,7 @@ const App: React.FC = () => {
   const [showContextModal, setShowContextModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showTestDashboard, setShowTestDashboard] = useState(false);
+  const [showHealthDashboard, setShowHealthDashboard] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
 
@@ -259,10 +261,15 @@ const App: React.FC = () => {
     loadData();
 
     // Keyboard shortcut for Test Dashboard: Ctrl+Shift+T
+    // Keyboard shortcut for Health Dashboard: Ctrl+Shift+H
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key === 'T') {
         e.preventDefault();
         setShowTestDashboard(true);
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'H') {
+        e.preventDefault();
+        setShowHealthDashboard(true);
       }
     };
     
@@ -1972,6 +1979,7 @@ const App: React.FC = () => {
       <PreviewModal />
       <ApiKeyModal />
       {showTestDashboard && <TestDashboard onClose={() => setShowTestDashboard(false)} />}
+      {showHealthDashboard && <SystemHealthDashboard apiClient={apiClient} onClose={() => setShowHealthDashboard(false)} />}
       
       {/* Admin Panel - Only accessible by admin users */}
       {showAdminPanel && user?.role?.name === 'admin' && (
@@ -2328,6 +2336,16 @@ const App: React.FC = () => {
                   <span className="font-medium">Admin Panel</span>
                 </button>
               )}
+              
+              {/* System Health Dashboard Button */}
+              <button 
+                onClick={() => setShowHealthDashboard(true)}
+                className="bg-green-900/30 hover:bg-green-800/40 text-green-300 hover:text-green-200 transition-all flex items-center gap-2 px-4 py-2 rounded-lg border border-green-700 hover:border-green-500"
+                title="System Health Dashboard - Runtime Testing & Validation (Ctrl+Shift+H)"
+              >
+                <IconRefresh className="w-4 h-4" />
+                <span className="font-medium">Health Check</span>
+              </button>
             </div>
             
             <div className="flex items-center gap-4">
