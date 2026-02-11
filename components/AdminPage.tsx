@@ -30,9 +30,10 @@ interface User {
 interface AdminPageProps {
   apiClient: any;
   onClose: () => void;
+  showConfirm: (title: string, message: string, onConfirm: () => void, confirmText?: string, cancelText?: string) => void;
 }
 
-export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
+export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose, showConfirm }) => {
   const [activeTab, setActiveTab] = useState<'glossary' | 'blacklist' | 'users'>('glossary');
   const [defaultGlossary, setDefaultGlossary] = useState<DefaultGlossaryItem[]>([]);
   const [defaultBlacklist, setDefaultBlacklist] = useState<DefaultBlacklistItem[]>([]);
@@ -61,6 +62,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
   const [previewData, setPreviewData] = useState<any>(null);
   const [sourceCol, setSourceCol] = useState(-1);
   const [targetCol, setTargetCol] = useState(-1);
+
+  // Bulk selection state
+  const [selectedGlossaryIds, setSelectedGlossaryIds] = useState<string[]>([]);
+  const [selectedBlacklistIds, setSelectedBlacklistIds] = useState<string[]>([]);
 
   const glossaryFileRef = useRef<HTMLInputElement>(null);
   const blacklistFileRef = useRef<HTMLInputElement>(null);
@@ -129,15 +134,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
   };
 
   const deleteGlossaryItem = async (id: string) => {
-    if (!confirm('Delete this default glossary term? This will remove it for ALL users.')) return;
-    try {
-      await apiClient.delete(`/admin/default-glossary/${id}`);
-      if (editingGlossaryId === id) cancelEditGlossary();
-      loadData();
-    } catch (error) {
-      console.error('Failed to delete glossary item:', error);
-      alert('Failed to delete item.');
-    }
+    showConfirm(
+      'Delete Default Glossary Term',
+      'Delete this default glossary term? This will remove it for ALL users.',
+      async () => {
+        try {
+          await apiClient.delete(`/admin/default-glossary/${id}`);
+          if (editingGlossaryId === id) cancelEditGlossary();
+          loadData();
+        } catch (error) {
+          console.error('Failed to delete glossary item:', error);
+          alert('Failed to delete item.');
+        }
+      },
+      'Delete',
+      'Cancel'
+    );
   };
 
   const toggleGlossaryActive = async (item: DefaultGlossaryItem) => {
@@ -198,15 +210,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
   };
 
   const deleteBlacklistItem = async (id: string) => {
-    if (!confirm('Delete this default blacklist term? This will remove protection for ALL users.')) return;
-    try {
-      await apiClient.delete(`/admin/default-blacklist/${id}`);
-      if (editingBlacklistId === id) cancelEditBlacklist();
-      loadData();
-    } catch (error) {
-      console.error('Failed to delete blacklist item:', error);
-      alert('Failed to delete item.');
-    }
+    showConfirm(
+      'Delete Default Blacklist Term',
+      'Delete this default blacklist term? This will remove protection for ALL users.',
+      async () => {
+        try {
+          await apiClient.delete(`/admin/default-blacklist/${id}`);
+          if (editingBlacklistId === id) cancelEditBlacklist();
+          loadData();
+        } catch (error) {
+          console.error('Failed to delete blacklist item:', error);
+          alert('Failed to delete item.');
+        }
+      },
+      'Delete',
+      'Cancel'
+    );
   };
 
   const toggleBlacklistActive = async (item: DefaultBlacklistItem) => {
@@ -232,6 +251,69 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
       console.error('Failed to toggle user status:', error);
       alert('Failed to toggle user status.');
     }
+  };
+
+  // Bulk selection functions
+  const selectAllGlossary = () => {
+    setSelectedGlossaryIds(filteredGlossary.map(g => g.id));
+  };
+
+  const unselectAllGlossary = () => {
+    setSelectedGlossaryIds([]);
+  };
+
+  const deleteSelectedGlossary = async () => {
+    if (selectedGlossaryIds.length === 0) return;
+    
+    showConfirm(
+      'Delete Selected Glossary Terms',
+      `Delete ${selectedGlossaryIds.length} selected glossary terms? This will remove them for ALL users.`,
+      async () => {
+        try {
+          await Promise.all(selectedGlossaryIds.map(id => 
+            apiClient.delete(`/admin/default-glossary/${id}`)
+          ));
+          setSelectedGlossaryIds([]);
+          loadData();
+        } catch (error) {
+          console.error('Failed to delete selected items:', error);
+          alert('Failed to delete some items.');
+        }
+      },
+      'Delete All',
+      'Cancel'
+    );
+  };
+
+  const selectAllBlacklist = () => {
+    setSelectedBlacklistIds(filteredBlacklist.map(b => b.id));
+  };
+
+  const unselectAllBlacklist = () => {
+    setSelectedBlacklistIds([]);
+  };
+
+  const deleteSelectedBlacklist = async () => {
+    if (selectedBlacklistIds.length === 0) return;
+    
+    showConfirm(
+      'Delete Selected Blacklist Terms',
+      `Delete ${selectedBlacklistIds.length} selected blacklist terms? This will remove protection for ALL users.`,
+      async () => {
+        try {
+          await Promise.all(selectedBlacklistIds.map(id => 
+            apiClient.delete(`/admin/default-blacklist/${id}`)
+          ));
+          setSelectedBlacklistIds([]);
+          loadData();
+        } catch (error) {
+          console.error('Failed to delete selected items:', error);
+          alert('Failed to delete some items.');
+        }
+      },
+      'Delete All',
+      'Cancel'
+    );
   };
 
   // Import handlers
@@ -433,20 +515,53 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
                     </button>
                   </div>
 
+                  {/* Bulk Actions */}
+                  {selectedGlossaryIds.length > 0 && (
+                    <div className="flex gap-2 items-center justify-between p-2 bg-blue-900/20 border border-blue-500/30 rounded">
+                      <span className="text-sm text-blue-300">{selectedGlossaryIds.length} selected</span>
+                      <div className="flex gap-2">
+                        <button onClick={unselectAllGlossary} className="px-3 py-1 text-xs bg-slate-600 hover:bg-slate-500 text-white rounded">
+                          Unselect All
+                        </button>
+                        <button onClick={deleteSelectedGlossary} className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded">
+                          Delete Selected
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* List */}
                   <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar border border-slate-700/50 rounded p-2 bg-slate-900/30">
                     {filteredGlossary.length === 0 ? 
                       <p className="text-slate-500 text-sm italic text-center mt-8">No default glossary terms. Add one above.</p> :
                       filteredGlossary.map(g => (
-                        <div key={g.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingGlossaryId === g.id ? 'border border-orange-500/50 bg-orange-900/10' : 'bg-slate-700/50'}`}>
+                        <div key={g.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingGlossaryId === g.id ? 'border border-orange-500/50 bg-orange-900/10' : selectedGlossaryIds.includes(g.id) ? 'bg-blue-900/20 border border-blue-500/30' : 'bg-slate-700/50'}`}>
                           <div className="flex items-center gap-2 flex-1">
                             <input 
                               type="checkbox" 
-                              checked={g.isActive} 
-                              onChange={() => toggleGlossaryActive(g)}
+                              checked={selectedGlossaryIds.includes(g.id)} 
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setSelectedGlossaryIds(prev => 
+                                  prev.includes(g.id) ? prev.filter(id => id !== g.id) : [...prev, g.id]
+                                );
+                              }}
                               className="w-4 h-4 rounded"
-                              title="Toggle active/inactive"
+                              title="Select for bulk action"
                             />
+                            <button
+                              onClick={() => toggleGlossaryActive(g)}
+                              className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                                g.isActive ? 'bg-green-500 border-green-500' : 'bg-slate-600 border-slate-500'
+                              }`}
+                              title="Toggle active/inactive"
+                            >
+                              {g.isActive && (
+                                <svg className="w-3 h-3 text-white" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path d="M5 13l4 4L19 7"></path>
+                                </svg>
+                              )}
+                            </button>
                             <span className={`text-blue-300 font-medium ${!g.isActive ? 'line-through opacity-50' : ''}`}>
                               {g.term}
                             </span>
@@ -471,6 +586,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
                   {/* Footer stats */}
                   <div className="flex justify-between items-center text-[10px] text-slate-500">
                     <span>Total: {defaultGlossary.length} terms ({defaultGlossary.filter(g => g.isActive).length} active)</span>
+                    <div className="flex gap-2">
+                      {selectedGlossaryIds.length > 0 && (
+                        <button onClick={unselectAllGlossary} className="text-blue-400 hover:underline">
+                          Unselect All
+                        </button>
+                      )}
+                      {filteredGlossary.length > 0 && (
+                        <button onClick={selectAllGlossary} className="text-blue-400 hover:underline">
+                          Select All ({filteredGlossary.length})
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -536,20 +663,55 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
                     </button>
                   </div>
 
+                  {/* Bulk Actions */}
+                  {selectedBlacklistIds.length > 0 && (
+                    <div className="flex gap-2 items-center justify-between p-2 bg-blue-900/20 border border-blue-500/30 rounded">
+                      <span className="text-sm text-blue-300">{selectedBlacklistIds.length} selected</span>
+                      <div className="flex gap-2">
+                        <button onClick={unselectAllBlacklist} className="px-3 py-1 text-xs bg-slate-600 hover:bg-slate-500 text-white rounded">
+                          Unselect All
+                        </button>
+                        <button onClick={deleteSelectedBlacklist} className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded">
+                          Delete Selected
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* List */}
                   <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar border border-slate-700/50 rounded p-2 bg-slate-900/30">
-                    {filteredBlacklist.length === 0 ? 
+                    {defaultBlacklist.length === 0 ? 
                       <p className="text-slate-500 text-sm italic text-center mt-8">No default blacklist terms. Add one above.</p> :
+                      filteredBlacklist.length === 0 ? 
+                      <p className="text-slate-500 text-sm italic text-center mt-8">No matches found.</p> :
                       filteredBlacklist.map(b => (
-                        <div key={b.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingBlacklistId === b.id ? 'border border-orange-500/50 bg-orange-900/10' : 'bg-slate-700/50'}`}>
+                        <div key={b.id} className={`flex justify-between items-center p-2 rounded text-sm group ${editingBlacklistId === b.id ? 'border border-orange-500/50 bg-orange-900/10' : selectedBlacklistIds.includes(b.id) ? 'bg-blue-900/20 border border-blue-500/30' : 'bg-slate-700/50'}`}>
                           <div className="flex items-center gap-2 flex-1">
                             <input 
                               type="checkbox" 
-                              checked={b.isActive} 
-                              onChange={() => toggleBlacklistActive(b)}
+                              checked={selectedBlacklistIds.includes(b.id)} 
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setSelectedBlacklistIds(prev => 
+                                  prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id]
+                                );
+                              }}
                               className="w-4 h-4 rounded"
-                              title="Toggle active/inactive"
+                              title="Select for bulk action"
                             />
+                            <button
+                              onClick={() => toggleBlacklistActive(b)}
+                              className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                                b.isActive ? 'bg-green-500 border-green-500' : 'bg-slate-600 border-slate-500'
+                              }`}
+                              title="Toggle active/inactive"
+                            >
+                              {b.isActive && (
+                                <svg className="w-3 h-3 text-white" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path d="M5 13l4 4L19 7"></path>
+                                </svg>
+                              )}
+                            </button>
                             <div className="flex-1">
                               <span className={`text-red-300 font-medium ${!b.isActive ? 'line-through opacity-50' : ''}`}>
                                 {b.term}
@@ -576,6 +738,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ apiClient, onClose }) => {
                   {/* Footer stats */}
                   <div className="flex justify-between items-center text-[10px] text-slate-500">
                     <span>Total: {defaultBlacklist.length} terms ({defaultBlacklist.filter(b => b.isActive).length} active) • Applies to ALL users</span>
+                    {filteredBlacklist.length > 0 && (
+                      <button onClick={selectAllBlacklist} className="text-blue-400 hover:underline">
+                        Select All ({filteredBlacklist.length})
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

@@ -42,6 +42,7 @@ import { AdminPage } from './components/AdminPage';
 import { AuthModal } from './components/AuthModal';
 import { GoogleCallback } from './components/GoogleCallback';
 import { LoginPage } from './components/LoginPage';
+import { ConfirmModal } from './components/ConfirmModal';
 import { AppStatus, FileType, SupportedLanguage, LogEntry, FileQueueItem, GlossaryItem, HistoryItem, BlacklistItem } from './types';
 import { processMarkdown, processExcel, processExcelWithShapes, processImage, processPptx, getExcelSheetNames, getExcelPreview, parseGlossaryByColumns, parseBlacklistFromExcel, ExcelPreviewData, hasShapes } from './services/fileProcessing';
 import { saveFileToDB, getFileFromDB, clearGlossaryDB, clearBlacklistDB } from './services/storage';
@@ -90,6 +91,29 @@ const App: React.FC = () => {
   const [showHealthDashboard, setShowHealthDashboard] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [previewItem, setPreviewItem] = useState<FileQueueItem | null>(null);
+
+  // Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const showConfirm = useCallback((
+    title: string,
+    message: string,
+    onConfirm: () => void,
+    confirmText: string = 'Confirm',
+    cancelText: string = 'Cancel'
+  ) => {
+    setConfirmModal({ title, message, confirmText, cancelText, onConfirm });
+  }, []);
+
+  const hideConfirm = useCallback(() => {
+    setConfirmModal(null);
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -777,11 +801,17 @@ const App: React.FC = () => {
     };
 
     const clearGlossary = async () => {
-      if (window.confirm("Are you sure you want to delete ALL glossary terms? This cannot be undone.")) {
-        await clearGlossaryDB();
-        setGlossary([]);
-        addLog('Glossary cleared.', 'info');
-      }
+      showConfirm(
+        'Delete All Glossary Terms',
+        'Are you sure you want to delete ALL glossary terms? This cannot be undone.',
+        async () => {
+          await clearGlossaryDB();
+          setGlossary([]);
+          addLog('Glossary cleared.', 'info');
+        },
+        'Delete All',
+        'Cancel'
+      );
     };
 
     // Step 1: Select File
@@ -1189,12 +1219,18 @@ const App: React.FC = () => {
           <div className="p-4 border-t border-slate-700 flex gap-2 justify-between">
             <button
               onClick={() => {
-                if (confirm('Clear API key from storage? This will reload the page and use the default key.')) {
-                  localStorage.removeItem('user_api_key');
-                  setUserApiKey('');
-                  addLog('API key cleared from storage', 'success');
-                  setTimeout(() => window.location.reload(), 500);
-                }
+                showConfirm(
+                  'Clear API Key',
+                  'Clear API key from storage? This will reload the page and use the default key.',
+                  () => {
+                    localStorage.removeItem('user_api_key');
+                    setUserApiKey('');
+                    addLog('API key cleared from storage', 'success');
+                    setTimeout(() => window.location.reload(), 500);
+                  },
+                  'Clear & Reload',
+                  'Cancel'
+                );
               }}
               className="px-3 py-2 bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/50 rounded text-sm text-orange-300 transition-colors flex items-center gap-2"
               title="Clear API key without reloading (useful if key is invalid)"
@@ -1354,17 +1390,23 @@ const App: React.FC = () => {
         return;
       }
       
-      if (!confirm(`Delete all ${userTermsCount} of YOUR protected terms? Admin terms will remain. This cannot be undone.`)) return;
-      
-      // Keep only admin terms
-      const adminTerms = blacklist.filter(b => b.isDefault);
-      setBlacklist(adminTerms);
-      
-      try {
-        await clearBlacklistDB(); // Clear user's blacklist from DB
-      } catch (e) {
-        console.error('Failed to clear blacklist', e);
-      }
+      showConfirm(
+        'Delete Personal Blacklist Terms',
+        `Delete all ${userTermsCount} of YOUR protected terms? Admin terms will remain. This cannot be undone.`,
+        async () => {
+          // Keep only admin terms
+          const adminTerms = blacklist.filter(b => b.isDefault);
+          setBlacklist(adminTerms);
+          
+          try {
+            await clearBlacklistDB(); // Clear user's blacklist from DB
+          } catch (e) {
+            console.error('Failed to clear blacklist', e);
+          }
+        },
+        'Delete All',
+        'Cancel'
+      );
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1993,11 +2035,27 @@ const App: React.FC = () => {
       {showTestDashboard && <TestDashboard onClose={() => setShowTestDashboard(false)} />}
       {showHealthDashboard && <SystemHealthDashboard apiClient={apiClient} onClose={() => setShowHealthDashboard(false)} />}
       
+      {/* Confirmation Modal */}
+      {confirmModal && (
+        <ConfirmModal
+          title={confirmModal.title}
+          message={confirmModal.message}
+          confirmText={confirmModal.confirmText}
+          cancelText={confirmModal.cancelText}
+          onConfirm={() => {
+            confirmModal.onConfirm();
+            hideConfirm();
+          }}
+          onCancel={hideConfirm}
+        />
+      )}
+      
       {/* Admin Panel - Only accessible by admin users */}
       {showAdminPanel && user?.role?.name === 'admin' && (
         <AdminPage 
           apiClient={apiClient} 
-          onClose={() => setShowAdminPanel(false)} 
+          onClose={() => setShowAdminPanel(false)}
+          showConfirm={showConfirm}
         />
       )}
 
