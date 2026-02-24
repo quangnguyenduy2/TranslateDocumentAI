@@ -3,6 +3,9 @@ import { GoogleGenAI, Type } from "@google/genai";
 import type { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
 import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector.ts';
 
+// Short preamble instructing model to read project context before translating
+const PREAMBLE = `Preamble: Before translating, carefully read the PROJECT CONTEXT provided below. Use it to inform terminology, tone, and formatting choices. If the project context contains glossary or style notes, prioritize those instructions when translating the content that follows.`;
+
 /**
  * Get API key from user's localStorage (saved from backend after login)
  * No fallback to env - user MUST set their own key
@@ -69,7 +72,8 @@ const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, 
   if (relevantGlossary.length > 0) {
     instruction += `\n\nGLOSSARY:\n` + relevantGlossary.map(i => `- ${i.term} -> ${i.translation}`).join('\n');
   }
-  return instruction;
+  // Prepend PREAMBLE so the model reads project context guidance first
+  return `${PREAMBLE}\n\n${instruction}`;
 };
 
 /**
@@ -264,17 +268,17 @@ export const translateImageContent = async (
   context: string = ''
 ): Promise<string | null> => {
   try {
+    const imagePrompt = `${PREAMBLE}\n\nTranslate all text in this image into ${targetLang}. 
+            Context: ${context}.
+            CRITICAL: Preserve the background, layout, colors, and font styles exactly. 
+            The output must be the modified image data.`;
+
     const response = await getAI().models.generateContent({
       model: MODEL_IMAGE,
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
-          { 
-            text: `Translate all text in this image into ${targetLang}. 
-            Context: ${context}.
-            CRITICAL: Preserve the background, layout, colors, and font styles exactly. 
-            The output must be the modified image data.` 
-          },
+          { text: imagePrompt },
         ],
       },
     });
@@ -300,7 +304,8 @@ export const translateImageContent = async (
 };
 
 export const extractTextFromBase64 = async (base64Data: string, mimeType: string = 'image/png'): Promise<string> => {
-  const prompt = `OCR expert: Extract ALL text as Markdown. Preserve layout. Do not translate.`;
+  const ocrPromptBase = `OCR expert: Extract ALL text as Markdown. Preserve layout. Do not translate.`;
+  const prompt = `${PREAMBLE}\n\n${ocrPromptBase}`;
   try {
     const response = await getAI().models.generateContent({
       model: MODEL_FAST,
