@@ -1,4 +1,5 @@
 import { translateText, translateBatchStrings, setAIClientForTest } from '../services/geminiService.ts';
+import { SupportedLanguage } from '../types.ts';
 
 // Minimal mock AI client matching used interface: getAI().models.generateContent
 const mockAI = {
@@ -56,11 +57,11 @@ setAIClientForTest(mockAI as any);
 
 (async () => {
   console.log('--- Running mock translateText test ---');
-  const single = await translateText('Line1\nLine2', 'Vietnamese', 'ctx', [] as any[]);
+  const single = await translateText('Line1\nLine2', SupportedLanguage.VIETNAMESE, 'ctx', [] as any[]);
   console.log('translateText result:', single);
 
   console.log('\n--- Running mock translateBatchStrings test ---');
   const arr = ['Cell1\nCell2', 'NoNewline here'];
-  const batch = await translateBatchStrings(arr, 'Vietnamese', 'ctx', [] as any[]);
+  const batch = await translateBatchStrings(arr, SupportedLanguage.VIETNAMESE, 'ctx', [] as any[]);
   console.log('translateBatchStrings result:', batch);
 })();

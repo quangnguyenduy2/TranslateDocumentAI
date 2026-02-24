@@ -176,7 +176,8 @@ export const parseGlossaryByColumns = async (
 
 export const parseBlacklistFromExcel = async (
   file: File,
-  termColIndex: number // 0-based index for "Protected Term" column
+  termColIndex: number, // 0-based index for "Protected Term" column
+  descColIndex?: number // optional 0-based index for "Description" column
 ): Promise<BlacklistItem[]> => {
   const arrayBuffer = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
@@ -189,11 +190,15 @@ export const parseBlacklistFromExcel = async (
     if (rowNumber === 1) return; // Skip Header
 
     const term = getGlossaryCellString(row.getCell(termColIndex + 1)).trim();
+    const description = (typeof descColIndex === 'number' && descColIndex >= 0)
+      ? getGlossaryCellString(row.getCell(descColIndex + 1)).trim()
+      : '';
 
     if (term) {
       items.push({
         id: Math.random().toString(36).substr(2, 9),
         term,
+        description: description || undefined,
         caseSensitive: false,
         enabled: true
       });
@@ -361,13 +366,44 @@ export const processExcel = async (
           const worksheet = workbook.getWorksheet(item.sheetName);
           if (worksheet) {
             const cell = worksheet.getCell(item.cellAddress);
+
+            // Snapshot existing formatting so we can restore after writing value
+            const prevFont = cell.font ? { ...cell.font } : undefined;
+            const prevAlignment = cell.alignment ? { ...cell.alignment } : undefined;
+            const prevBorder = cell.border ? { ...cell.border } : undefined;
+            const prevFill = cell.fill ? { ...cell.fill } : undefined;
+            const prevNumFmt = (cell as any).numFmt !== undefined ? (cell as any).numFmt : undefined;
+            const prevProtection = cell.protection ? { ...cell.protection } : undefined;
+            const prevNote = (cell as any).note !== undefined ? (cell as any).note : undefined;
+            const prevHyperlink = (cell as any).hyperlink !== undefined ? (cell as any).hyperlink : undefined;
+
+            // Write translated content (preserve rich text when tags used)
             if (hasFormattingTags(translatedText)) {
               cell.value = taggedStringToRichText(translatedText);
             } else {
               cell.value = translatedText;
             }
-            // Visual cue for translated cells
-            if (!cell.border) {
+
+            // Plain text for heuristics
+            const plainTranslated = hasFormattingTags(translatedText)
+              ? translatedText.replace(/<\/?(?:b|i|u|s)>/g, '')
+              : String(translatedText || '');
+
+            // Restore formatting fields we care about
+            if (prevFont) cell.font = prevFont;
+            if (prevBorder) cell.border = prevBorder;
+            if (prevFill) cell.fill = prevFill;
+            if (prevNumFmt) (cell as any).numFmt = prevNumFmt;
+            if (prevProtection) cell.protection = prevProtection;
+            if (prevNote) (cell as any).note = prevNote;
+            if (prevHyperlink) (cell as any).hyperlink = prevHyperlink;
+
+            // Reapply alignment but enable wrapText when original had it or translated text likely needs it
+            const shouldWrap = (prevAlignment && prevAlignment.wrapText) || plainTranslated.includes('\n') || plainTranslated.length > 80;
+            cell.alignment = { ...(prevAlignment || {}), wrapText: shouldWrap };
+
+            // If there was no previous border, keep a subtle visual cue for translated cells
+            if (!prevBorder) {
               cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
             }
           }

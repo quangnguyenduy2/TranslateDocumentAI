@@ -1,4 +1,4 @@
-import { TestCase, TestResult } from './types';
+import { TestCase, TestResult } from './types.ts';
 import ExcelJS from 'exceljs';
 
 /**

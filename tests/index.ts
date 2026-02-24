@@ -1,9 +1,9 @@
-import { TestCase } from './types';
-import { coreTests } from './coreTests';
-import { storageTests } from './storageTests';
-import { processingTests } from './processingTests';
+import { TestCase } from './types.ts';
+import { coreTests } from './coreTests.ts';
+import { storageTests } from './storageTests.ts';
+import { processingTests } from './processingTests.ts';
 
-export * from './types';
+export * from './types.ts';
 
 export const allTests: TestCase[] = [
   ...coreTests,

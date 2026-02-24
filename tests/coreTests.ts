@@ -1,6 +1,6 @@
-import { TestCase, TestResult } from './types';
-import { GlossaryItem, BlacklistItem } from '../types';
-import { maskText, unmaskText } from '../services/textProtector';
+import { TestCase, TestResult } from './types.ts';
+import { GlossaryItem, BlacklistItem } from '../types.ts';
+import { maskText, unmaskText } from '../services/textProtector.ts';
 
 /**
  * Test 1: Glossary Matching Logic

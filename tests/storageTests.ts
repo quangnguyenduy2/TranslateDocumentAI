@@ -1,6 +1,6 @@
-import { TestCase, TestResult } from './types';
-import { initDB, saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, saveBlacklistToDB, getBlacklistFromDB } from '../services/storage';
-import { GlossaryItem, BlacklistItem } from '../types';
+import { TestCase, TestResult } from './types.ts';
+import { initDB, saveFileToDB, getFileFromDB, saveGlossaryToDB, getGlossaryFromDB, saveBlacklistToDB, getBlacklistFromDB } from '../services/storage.ts';
+import { GlossaryItem, BlacklistItem } from '../types.ts';
 
 /**
  * Test 1: IndexedDB Initialization

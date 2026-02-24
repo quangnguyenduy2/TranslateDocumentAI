@@ -11,9 +11,9 @@
  * 7. URL/hyperlink preservation
  */
 
-import { describe, test, expect, beforeAll } from '@jest/globals';
-import { processPptxV2 } from '../services/pptxProcessorV2';
-import { SupportedLanguage } from '../types';
+// Using global Jest functions provided by types (@types/jest)
+import { processPptxV2 } from '../services/pptxProcessorV2.ts';
+import { SupportedLanguage } from '../types.ts';
 import JSZip from 'jszip';
 
 // Mock test files (in real implementation, these would be actual PPTX files)
