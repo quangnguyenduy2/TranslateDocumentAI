@@ -1209,11 +1209,6 @@ const App: React.FC = () => {
               </div>
             )}
             
-            {!userApiKey && (
-              <div className="bg-blue-900/20 border border-blue-500/30 rounded p-3 text-xs text-blue-300">
-                ℹ️ Currently using the default API key (shared with other users)
-              </div>
-            )}
           </div>
           
           <div className="p-4 border-t border-slate-700 flex gap-2 justify-between">

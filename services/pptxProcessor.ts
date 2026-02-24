@@ -1,9 +1,15 @@
 import JSZip from 'jszip';
 import { translateBatchStrings, translateImageContent } from './geminiService';
 import { SupportedLanguage, GlossaryItem } from '../types';
+import { maskBatchTexts, unmaskText, ProtectionMap } from './textProtector';
 
 /**
  * Xử lý file PPTX: Dịch text (bao gồm Table) và dịch Ảnh.
+ * 
+ * Phase 1 Improvements:
+ * - URL/Hyperlink preservation using textProtector
+ * - Vietnamese spacing fix via xml:space="preserve"
+ * - Date field detection to skip translation
  */
 export const processPptx = async (
   file: File,
@@ -36,8 +42,17 @@ export const processPptx = async (
     filePath: string;
     element: Element;
     text: string;
+    isDateField: boolean; // Flag for date/time fields
   }
   const textNodes: TextNodeRef[] = [];
+
+  // URL/Link protection patterns
+  const urlBlacklist = [
+    { id: 'url-http', term: 'http://', caseSensitive: false, enabled: true },
+    { id: 'url-https', term: 'https://', caseSensitive: false, enabled: true },
+    { id: 'url-www', term: 'www.', caseSensitive: false, enabled: true },
+    { id: 'email', term: '@', caseSensitive: false, enabled: true },
+  ];
 
   // 1. Thu thập tất cả node text (<a:t>)
   for (const path of xmlFiles) {
@@ -50,21 +65,62 @@ export const processPptx = async (
     elements.forEach(el => {
       const val = el.textContent?.trim();
       if (val) {
-        textNodes.push({ filePath: path, element: el, text: val });
+        // Check if this is a date/time field (inside <a:fld> tag)
+        const parent = el.parentElement;
+        const isDateField = parent?.nodeName?.includes('fld') || 
+                           parent?.parentElement?.nodeName?.includes('fld') ||
+                           false;
+        
+        textNodes.push({ filePath: path, element: el, text: val, isDateField });
+        
+        // Add xml:space="preserve" to prevent space normalization (Vietnamese spacing fix)
+        el.setAttribute('xml:space', 'preserve');
       }
     });
   }
 
-  // 2. Dịch Text theo Batch
+  // 2. Dịch Text theo Batch (với URL protection và date field skipping)
   if (textNodes.length > 0) {
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < textNodes.length; i += BATCH_SIZE) {
-      const chunk = textNodes.slice(i, i + BATCH_SIZE);
-      onProgress(`Translating text ${i + 1}/${textNodes.length}...`, 20 + Math.floor((i / textNodes.length) * 50));
+    // Separate date fields from regular text
+    const regularNodes = textNodes.filter(n => !n.isDateField);
+    const dateFieldNodes = textNodes.filter(n => n.isDateField);
+    
+    if (dateFieldNodes.length > 0) {
+      onProgress(`Skipping ${dateFieldNodes.length} date/time fields...`, 18);
+    }
+
+    if (regularNodes.length > 0) {
+      // Extract original texts
+      const originalTexts = regularNodes.map(n => n.text);
       
-      const translated = await translateBatchStrings(chunk.map(n => n.text), targetLang, context, glossary);
-      chunk.forEach((node, idx) => {
-        if (translated[idx]) node.element.textContent = translated[idx];
+      // Mask URLs and sensitive patterns
+      const { maskedTexts, protectionMap } = maskBatchTexts(originalTexts, urlBlacklist);
+      
+      const BATCH_SIZE = 50;
+      const translatedMasked: string[] = [];
+      
+      for (let i = 0; i < maskedTexts.length; i += BATCH_SIZE) {
+        const chunk = maskedTexts.slice(i, i + BATCH_SIZE);
+        const startIndex = i;
+        const endIndex = Math.min(i + BATCH_SIZE, maskedTexts.length);
+        
+        onProgress(
+          `Translating text ${startIndex + 1}-${endIndex}/${maskedTexts.length}...`, 
+          20 + Math.floor((i / maskedTexts.length) * 50)
+        );
+        
+        const translated = await translateBatchStrings(chunk, targetLang, context, glossary);
+        translatedMasked.push(...translated);
+      }
+      
+      // Unmask URLs in translated texts
+      const finalTranslated = translatedMasked.map(text => unmaskText(text, protectionMap));
+      
+      // Update text nodes with translated content
+      regularNodes.forEach((node, idx) => {
+        if (finalTranslated[idx]) {
+          node.element.textContent = finalTranslated[idx];
+        }
       });
     }
 

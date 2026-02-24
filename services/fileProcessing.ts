@@ -2,11 +2,12 @@
 import ExcelJS from 'exceljs';
 import { translateText, translateBatchStrings, extractTextFromImage, extractTextFromBase64, detectLanguage } from './geminiService';
 import { SupportedLanguage, GlossaryItem, BlacklistItem } from '../types';
-import { processPptx } from './pptxProcessor';
+import { processPptxV2 } from './pptxProcessorV2';
 import { processExcelWithShapes } from './xlsxPopulateProcessor';
 import { hasShapes } from './excelShapeExtractor';
 
-export { processPptx, processExcelWithShapes, hasShapes };
+// Export V2 as default PPTX processor
+export { processPptxV2 as processPptx, processExcelWithShapes, hasShapes };
 
 // --- HELPERS ---
 
