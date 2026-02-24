@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
-import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector';
+import type { SupportedLanguage, GlossaryItem, BlacklistItem } from "../types";
+import { maskText, unmaskText, maskBatchTexts, unmaskBatchTexts } from './textProtector.ts';
 
 /**
  * Get API key from user's localStorage (saved from backend after login)
@@ -37,6 +37,18 @@ export const reinitializeAI = () => {
 
 const MODEL_FAST = 'gemini-3-flash-preview';
 const MODEL_IMAGE = 'gemini-2.5-flash-image';
+
+// Normalize escaped newline sequences returned by model into real newlines
+const normalizeEscapedNewlines = (s: string | undefined | null): string => {
+  if (!s || typeof s !== 'string') return s as string || '';
+  // Convert CRLF escapes first, then LF escapes, and also handle literal \\r
+  return s.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n');
+};
+
+// For testing: allow injection of a mock AI client
+export const setAIClientForTest = (client: any) => {
+  ai = client;
+};
 
 /**
  * Lọc glossary liên quan đến đoạn văn bản hiện tại.
@@ -367,11 +379,13 @@ export const translateText = async (
     throw response;
   }
   
-  const translated = response.text?.replace(/^```markdown\s*|```$/g, '') || cleanedText;
-  
+  let translated = response.text?.replace(/^```markdown\s*|```$/g, '') || cleanedText;
+  // Normalize escaped newline sequences (e.g. "\\n") into real newlines
+  translated = normalizeEscapedNewlines(translated);
+
   // STEP 4: Restore language-specific placeholders
   const restoredPlaceholders = placeholders.length > 0 ? restorePlaceholders(translated, placeholders) : translated;
-  
+
   // STEP 5: Unmask sensitive data
   return unmaskText(restoredPlaceholders, protectionMap);
 };
@@ -465,8 +479,11 @@ export const translateBatchStrings = async (
       if (translations && Array.isArray(translations) && translations.length === texts.length) {
         console.log('📥 ===== translations FROM AI  =====',translations);
         
+        // Normalize escaped newlines in each translation
+        const normalized = translations.map((t: string) => normalizeEscapedNewlines(t));
+
         // STEP 4: Restore language-specific placeholders for all translations
-        const restoredTranslations = translations.map((translated, index) =>
+        const restoredTranslations = normalized.map((translated, index) =>
           extractedData[index].placeholders.length > 0
             ? restorePlaceholders(translated, extractedData[index].placeholders)
             : translated
