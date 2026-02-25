@@ -70,7 +70,7 @@ const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, 
 
   if (context?.trim()) instruction += `\nCONTEXT: ${context}`;
   if (relevantGlossary.length > 0) {
-    instruction += `\n\nGLOSSARY:\n` + relevantGlossary.map(i => `- ${i.term} -> ${i.translation}`).join('\n');
+    instruction += `\n\nCRITICAL: When a glossary is provided, strictly follow the glossary translations below verbatim. Do not paraphrase, alter, or substitute glossary terms unless explicitly instructed. If a glossary term appears inside another word, replace only whole-word occurrences unless the glossary explicitly indicates otherwise.\n\nGLOSSARY:\n` + relevantGlossary.map(i => `- ${i.term} -> ${i.translation}`).join('\n');
   }
   // Prepend PREAMBLE so the model reads project context guidance first
   return `${PREAMBLE}\n\n${instruction}`;
