@@ -6,6 +6,7 @@ interface ShapeText {
   originalText: string;
 }
 
+
 /**
  * Check if Excel file contains any shapes/drawings (fast detection)
  * Returns true if file has shapes, false otherwise
