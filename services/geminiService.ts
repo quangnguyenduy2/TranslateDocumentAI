@@ -70,7 +70,10 @@ const buildSystemInstruction = (targetLang: SupportedLanguage, context: string, 
 
   if (context?.trim()) instruction += `\nCONTEXT: ${context}`;
   if (relevantGlossary.length > 0) {
-    instruction += `\n\nCRITICAL: When a glossary is provided, strictly follow the glossary translations below verbatim. Do not paraphrase, alter, or substitute glossary terms unless explicitly instructed. If a glossary term appears inside another word, replace only whole-word occurrences unless the glossary explicitly indicates otherwise.\n\nGLOSSARY:\n` + relevantGlossary.map(i => `- ${i.term} -> ${i.translation}`).join('\n');
+    instruction += `\n\nCRITICAL: When a glossary is provided, strictly follow the glossary translations below verbatim. Do not paraphrase, alter, or substitute glossary terms unless explicitly instructed. If a glossary term appears inside another word, replace only whole-word occurrences unless the glossary explicitly indicates otherwise. Do not split one source word into multiple different target words; provide one consistent translation for each source word across the document. If a multi-word rendering is necessary, use that same multi-word rendering consistently and annotate it once.\n\nGLOSSARY:\n` + relevantGlossary.map(i => `- ${i.term} -> ${i.translation}`).join('\n');
+  } else {
+    // Ensure behavior even when no glossary is provided
+    instruction += `\n\nCRITICAL: Do not split one source word into multiple different target words; provide one consistent translation for each source word across the document. If a multi-word rendering is necessary, use that same multi-word rendering consistently and annotate it once.`;
   }
   // Prepend PREAMBLE so the model reads project context guidance first
   return `${PREAMBLE}\n\n${instruction}`;
@@ -429,7 +432,16 @@ export const translateBatchStrings = async (
   
   // STEP 3: Extract placeholders from all texts (smart: based on source→target)
   const extractedData = maskedTexts.map(text => extractPlaceholders(text, sourceLang, targetLang));
-  const cleanedTexts = extractedData.map(d => d.cleanedText);
+
+  // NAMESPACE placeholders PER ITEM to avoid collisions when sending a batch.
+  // We rewrite tokens like __P0__ -> __BP{idx}_P0__ so each item's placeholders are unique.
+  const namespacedPlaceholders = extractedData.map((d, idx) =>
+    d.placeholders.map((ph, pIdx) => ({ token: `__BP${idx}_P${pIdx}__`, value: ph }))
+  );
+
+  const cleanedTexts = extractedData.map((d, idx) =>
+    d.cleanedText.replace(/__P(\d+)__/g, (_m, g1) => `__BP${idx}_P${g1}__`)
+  );
   
   const relevantGlossary = filterRelevantGlossary(cleanedTexts.join(' '), glossary);
   const instruction = buildSystemInstruction(targetLang, context, relevantGlossary);
@@ -488,11 +500,16 @@ export const translateBatchStrings = async (
         const normalized = translations.map((t: string) => normalizeEscapedNewlines(t));
 
         // STEP 4: Restore language-specific placeholders for all translations
-        const restoredTranslations = normalized.map((translated, index) =>
-          extractedData[index].placeholders.length > 0
-            ? restorePlaceholders(translated, extractedData[index].placeholders)
-            : translated
-        );
+        // We reverse the namespacing above: replace __BP{idx}_P{n}__ with the original placeholder value
+        const restoredTranslations = normalized.map((translated, index) => {
+          const ns = namespacedPlaceholders[index];
+          if (!ns || ns.length === 0) return translated;
+          let out = translated;
+          for (const ph of ns) {
+            out = out.replace(new RegExp(ph.token, 'g'), ph.value);
+          }
+          return out;
+        });
         
         // STEP 5: Unmask sensitive data
         const finalResult = unmaskBatchTexts(restoredTranslations, globalProtectionMap);
