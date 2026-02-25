@@ -1,13 +1,20 @@
+import './polyfills'; // Load polyfills FIRST
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { Buffer } from 'buffer';
+
+// Aggressive polyfill for Buffer - must run before any imports
+(window as any).Buffer = Buffer;
+(globalThis as any).Buffer = Buffer;
+(window as any).global = window;
 
 // Robust polyfill for Buffer in the browser environment
 if (typeof window !== 'undefined') {
   // Fix: Property 'Buffer' does not exist on type 'Window & typeof globalThis'.
   // Ensure Buffer is available globally
   (window as any).Buffer = (window as any).Buffer || Buffer;
+  (globalThis as any).Buffer = (globalThis as any).Buffer || Buffer;
   
   // Explicitly patch isEncoding if missing
   // Fix: Property 'Buffer' does not exist on type 'Window & typeof globalThis'.

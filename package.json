@@ -10,16 +10,18 @@
   },
   "dependencies": {
     "@google/genai": "^1.38.0",
-    "buffer": "6.0.3",
+    "axios": "^1.13.4",
+    "buffer": "^6.0.3",
     "docx-preview": "^0.3.7",
     "driver.js": "^1.4.0",
     "exceljs": "4.4.0",
-    "jszip": "3.10.1",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "pdfjs-dist": "^5.4.624",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-populate": "^1.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

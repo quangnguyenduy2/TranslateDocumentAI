@@ -1,9 +1,10 @@
-import { GlossaryItem } from '../types';
+import { GlossaryItem, BlacklistItem } from '../types';
 
 const DB_NAME = 'DocuTranslateDB';
 const FILE_STORE = 'files';
 const GLOSSARY_STORE = 'glossary_store';
-const DB_VERSION = 2; // Bump version for schema upgrade
+const BLACKLIST_STORE = 'blacklist_store';
+const DB_VERSION = 3; // Bump version for blacklist store
 
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
@@ -25,6 +26,11 @@ export const initDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains(GLOSSARY_STORE)) {
         // We use 'id' as keyPath
         db.createObjectStore(GLOSSARY_STORE, { keyPath: 'id' });
+      }
+
+      // Store for Blacklist (Protected Terms)
+      if (!db.objectStoreNames.contains(BLACKLIST_STORE)) {
+        db.createObjectStore(BLACKLIST_STORE, { keyPath: 'id' });
       }
     };
   });
@@ -107,6 +113,47 @@ export const clearGlossaryDB = async (): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([GLOSSARY_STORE], 'readwrite');
     const store = transaction.objectStore(GLOSSARY_STORE);
+    const request = store.clear();
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+  });
+};
+
+// --- BLACKLIST STORAGE ---
+
+export const saveBlacklistToDB = async (items: BlacklistItem[]): Promise<void> => {
+  if (items.length === 0) return;
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([BLACKLIST_STORE], 'readwrite');
+    const store = transaction.objectStore(BLACKLIST_STORE);
+    
+    const clearReq = store.clear();
+    clearReq.onsuccess = () => {
+      items.forEach(item => store.put(item));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    };
+    clearReq.onerror = () => reject(clearReq.error);
+  });
+};
+
+export const getBlacklistFromDB = async (): Promise<BlacklistItem[]> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([BLACKLIST_STORE], 'readonly');
+    const store = transaction.objectStore(BLACKLIST_STORE);
+    const request = store.getAll();
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result || []);
+  });
+};
+
+export const clearBlacklistDB = async (): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([BLACKLIST_STORE], 'readwrite');
+    const store = transaction.objectStore(BLACKLIST_STORE);
     const request = store.clear();
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve();

@@ -21,6 +21,14 @@ export interface GlossaryItem {
   translation: string;
 }
 
+export interface BlacklistItem {
+  id: string;
+  term: string;
+  caseSensitive?: boolean;
+  enabled?: boolean;
+  isDefault?: boolean; // True if this is an admin-managed default term
+}
+
 export interface HistoryItem {
   id: string;
   fileName: string;
